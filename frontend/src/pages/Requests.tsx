@@ -1,10 +1,15 @@
 import { useCallback, useEffect, useState } from "react";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { api, getAdminToken, type RequestRow } from "../lib/api";
 import { Card } from "../components/Card";
 import { relTime, usd } from "../lib/format";
 
+const FILTER_KEYS = ["key_id", "provider", "model", "status", "mode", "start", "end"] as const;
+
 export function Requests() {
   const hasToken = Boolean(getAdminToken());
+  const navigate = useNavigate();
+  const [params] = useSearchParams();
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const [more, setMore] = useState(false);
@@ -12,23 +17,34 @@ export function Requests() {
   const [open, setOpen] = useState<RequestRow | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback((after: number | null) => {
-    const qs = "?limit=50" + (after ? `&cursor=${after}` : "");
-    api
-      .listRequests(qs)
-      .then((r) => {
-        setRows((prev) => (after ? [...prev, ...r.items] : r.items));
-        setCursor(r.next_cursor);
-        setMore(r.next_cursor != null);
-        setBodiesLogged(r.bodies_logged);
-        setError(null);
-      })
-      .catch((e: Error) => setError(e.message));
-  }, []);
+  const activeFilters: [string, string][] = FILTER_KEYS.flatMap((k) => {
+    const v = params.get(k);
+    return v != null ? [[k, v] as [string, string]] : [];
+  });
+  const filterKey = params.toString();
+
+  const load = useCallback(
+    (after: number | null) => {
+      const p = new URLSearchParams(params);
+      p.set("limit", "50");
+      if (after) p.set("cursor", String(after));
+      api
+        .listRequests("?" + p.toString())
+        .then((r) => {
+          setRows((prev) => (after ? [...prev, ...r.items] : r.items));
+          setCursor(r.next_cursor);
+          setMore(r.next_cursor != null);
+          setBodiesLogged(r.bodies_logged);
+          setError(null);
+        })
+        .catch((e: Error) => setError(e.message));
+    },
+    [params],
+  );
 
   useEffect(() => {
     if (hasToken) load(null);
-  }, [hasToken, load]);
+  }, [hasToken, load, filterKey]);
 
   if (!hasToken) {
     return (
@@ -57,6 +73,27 @@ export function Requests() {
       {error && (
         <div className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-400">
           {error}
+        </div>
+      )}
+      {activeFilters.length > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-xs">
+          <span className="text-fg-subtle">Filtered:</span>
+          {activeFilters.map(([k, v]) => (
+            <span
+              key={k}
+              className="rounded bg-fill px-1.5 py-0.5 font-mono text-[11px] text-fg-muted"
+            >
+              {k === "start" || k === "end"
+                ? `${k}=${new Date(v).toLocaleString()}`
+                : `${k}=${v}`}
+            </span>
+          ))}
+          <button
+            onClick={() => navigate("/requests")}
+            className="ml-auto text-brand-600 hover:underline"
+          >
+            Clear
+          </button>
         </div>
       )}
       {!bodiesLogged && (

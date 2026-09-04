@@ -18,7 +18,7 @@ OpenAI · Anthropic · OpenRouter.
 > key is configured and passes a liveness check. Otherwise it falls back to simulated.
 
 ```
-Browser → React (Dashboard · Playground · Requests · Admin)
+Browser → React (Dashboard · Playground · Requests · Insights · Admin)
         → FastAPI gateway
             → virtual-key auth  →  per-key provider ACL  →  per-key monthly budget
             → simulator (default)  |  real provider call (gated)   [JSON or SSE stream]
@@ -69,6 +69,10 @@ On first boot the backend creates the schema. Everything starts **empty**. Demo 
    (or point an OpenAI SDK at `http://localhost:8000/v1`).
 3. **Dashboard** → summary + latency p50/p95 + error rate + tokens/sec + charts, live.
 4. **Requests** (admin) → per-request log; click a row for the detail drawer.
+5. **Insights** (admin) → anomaly alerts (cost / token spikes). *Admin → Demo tools → Inject
+   usage spike* seeds a believable one. Click **Investigate** → ranked contributors (which key /
+   model / volume) + a plain-English analysis → **View related requests** deep-links to the
+   filtered log.
 
 Reset everything (wipes the DB):
 
@@ -179,7 +183,9 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | GET | `/api/providers` | `X-Admin-Token` | `[{provider, env_var, configured, valid, checked_at}]` (`?refresh=true` to re-check) |
 | POST | `/api/keys` | `X-Admin-Token` | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?}` → raw key shown once |
 | GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | `X-Admin-Token` | list (+ `spend_month`) / `{allow_live, default_provider, monthly_budget_usd, clear_budget}` / revoke |
-| GET | `/api/requests` | `X-Admin-Token` | recent request log (`?limit&cursor&provider&model&key_id&status&mode`) |
+| GET | `/api/requests` | `X-Admin-Token` | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
+| GET | `/api/insights/alerts` `\|` `/alerts/{id}` | `X-Admin-Token` | anomaly alerts / investigation (contributors + analysis + `related_query`) |
+| POST | `/api/insights/demo-spike` | `X-Admin-Token` | inject synthetic simulated usage with a deliberate 24h spike (demo helper) |
 | **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget, `403` provider not on key. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + per-provider `mode` (`simulated`/`live`) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
@@ -207,7 +213,7 @@ browser. `/api/providers` reports presence + liveness as booleans only.
 
 ## Future improvements
 
-Per-key rate limits (RPM) · budget-threshold alerts/webhooks · Prometheus `/metrics` · pricing
-catalog auto-synced from OpenRouter `/api/v1/models` · exact-match response cache · provider
-fallback on live error · Alembic migrations + backups · Redis for shared counters · SSO / org
-hierarchy · OpenTelemetry traces.
+Per-key rate limits (RPM) · webhook/Slack alerts + scheduled anomaly detection · LLM-written
+insight narratives · Prometheus `/metrics` · pricing catalog auto-synced from OpenRouter
+`/api/v1/models` · exact-match response cache · provider fallback on live error · Alembic
+migrations + backups · Redis for shared counters · SSO / org hierarchy · OpenTelemetry traces.

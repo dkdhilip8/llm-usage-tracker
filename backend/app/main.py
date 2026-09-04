@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse
 from app import providers
 from app.config import settings
 from app.db import Base, engine
-from app.routers import keys, openai_compat, proxy, usage
+from app.routers import insights, keys, openai_compat, proxy, usage
 from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
@@ -51,6 +51,7 @@ app.include_router(proxy.router)
 app.include_router(openai_compat.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)
+app.include_router(insights.router)
 app.include_router(usage.router)
 
 

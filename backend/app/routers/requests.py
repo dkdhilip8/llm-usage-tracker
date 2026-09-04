@@ -3,6 +3,8 @@
 Admin-gated because rows can carry prompt/response previews (only when
 LOG_BODIES=true)."""
 
+from datetime import datetime
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import Select, select
 from sqlalchemy.orm import Session
@@ -24,6 +26,8 @@ def list_requests(
     key_id: int | None = None,
     status: str | None = None,
     mode: str | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
     db: Session = Depends(get_db),
 ) -> dict:
     limit = max(1, min(limit, 200))
@@ -35,6 +39,10 @@ def list_requests(
     )
     if cursor is not None:
         stmt = stmt.where(UsageLog.id < cursor)
+    if start is not None:
+        stmt = stmt.where(UsageLog.ts >= start)
+    if end is not None:
+        stmt = stmt.where(UsageLog.ts < end)
     if provider:
         stmt = stmt.where(UsageLog.provider == provider)
     if model:

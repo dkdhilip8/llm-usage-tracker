@@ -236,6 +236,36 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
   );
 }
 
+function DemoTools() {
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  return (
+    <Card title="Demo tools">
+      <div className="space-y-2">
+        <button
+          onClick={() => {
+            setBusy(true);
+            api
+              .injectDemoSpike()
+              .then((r) => setMsg(`Inserted ${r.inserted} rows (${r.key_label}). Open Insights →`))
+              .catch((e: Error) => setMsg(e.message))
+              .finally(() => setBusy(false));
+          }}
+          disabled={busy}
+          className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          {busy ? "Injecting…" : "Inject usage spike"}
+        </button>
+        {msg && <div className="text-xs text-fg-muted">{msg}</div>}
+        <p className="text-[11px] text-fg-subtle">
+          Writes synthetic <em>simulated</em> usage (10 baseline days + a last-24h spike on a demo
+          key) so the Insights tab has an anomaly to show. Deterministic and safe to run repeatedly.
+        </p>
+      </div>
+    </Card>
+  );
+}
+
 export function Admin() {
   const [token, setToken] = useState(getAdminToken());
   const [savedToken, setSavedToken] = useState(getAdminToken());
@@ -311,6 +341,8 @@ export function Admin() {
         <ProviderPanel />
         <CreateKeyForm onCreated={refresh} />
       </div>
+
+      <DemoTools />
 
       <Card title={`Virtual keys (${keys.length})`}>
         <div className="overflow-x-auto">
