@@ -5,8 +5,15 @@ send requests through the proxy, and watch a dashboard of per-user token usage a
 OpenAI · Anthropic · OpenRouter.
 
 > **Demo only — not for production.** Ships in **simulated** mode (no real provider calls, no
-> API keys, $0 cost). Auth is a single shared admin token. Data is disposable — the app starts
-> **empty**; you create keys and generate usage yourself.
+> API keys, $0 cost). Auth is a single shared admin token — there is no user system.
+>
+> **Public vs admin — one shared dataset, not multi-tenant.** Every visitor sees the *same*
+> pre-populated demo data; there's no signup and nothing is scoped to "your" login. **Dashboard,
+> Requests and Insights are read-only and public** — no token needed. **Admin is the only gate**:
+> create/revoke keys, change budgets, and reset the demo dataset all require the admin token.
+> **Playground** sends real requests through the gateway, so it's admin-only too. Public visitors
+> cannot write anything — the proxy endpoints still require a valid `vk_…` key, and no UI path
+> hands one out.
 >
 > **Cost**: for **live OpenRouter** calls it's the provider's *actual* charge (`usage.cost` from
 > the response). OpenAI/Anthropic don't return a per-request cost, so those (and all simulated
@@ -15,15 +22,16 @@ OpenAI · Anthropic · OpenRouter.
 >
 > Real provider calls are wired but **off by default**. A request only hits a real provider when
 > `ENABLE_LIVE=true` **and** the virtual key has `allow_live` **and** that provider's server-side
-> key is configured and passes a liveness check. Otherwise it falls back to simulated.
+> key is configured and passes a liveness check. Otherwise it falls back to simulated — the
+> public deployment keeps `ENABLE_LIVE=false`.
 
 ```
-Browser → React (Dashboard · Playground · Requests · Insights · Admin)
+Browser → React (Dashboard · Requests · Insights — public)  +  (Playground · Admin — token)
         → FastAPI gateway
             → virtual-key auth  →  per-key provider ACL  →  per-key monthly budget
             → simulator (default)  |  real provider call (gated)   [JSON or SSE stream]
-        → PostgreSQL (virtual_keys, allowed_providers, usage_logs)
-        → dashboard aggregates + request log
+        → PostgreSQL (virtual_keys, allowed_providers, usage_logs) — one shared dataset
+        → dashboard aggregates + request log (public reads) · demo reset (admin write)
 ```
 
 - **OpenAI-compatible** — point any OpenAI SDK at `/v1`:
@@ -61,18 +69,22 @@ docker compose up --build
 | API docs  | http://localhost:8000/docs   |
 | Adminer   | `docker compose --profile tools up` → http://localhost:8080 (server `db`, user/pass `llm`) |
 
-On first boot the backend creates the schema. Everything starts **empty**. Demo flow:
+On first boot the backend creates the schema and starts **empty** (`SEED_DEMO_DATA=false`
+locally). Demo flow:
 
-1. **Admin** (local dev token `dev-admin-token`) → check the Providers panel → create a virtual
-   key: label, allowed providers, optional default provider + monthly budget.
-2. **Playground** → paste the `vk_…` key → pick an allowed provider + model → send a few requests
-   (or point an OpenAI SDK at `http://localhost:8000/v1`).
-3. **Dashboard** → summary + latency p50/p95 + error rate + tokens/sec + charts, live.
-4. **Requests** (admin) → per-request log; click a row for the detail drawer.
-5. **Insights** (admin) → anomaly alerts (cost / token spikes). *Admin → Demo tools → Inject
-   usage spike* seeds a believable one. Click **Investigate** → ranked contributors (which key /
-   model / volume) + a plain-English analysis → **View related requests** deep-links to the
-   filtered log.
+1. **Admin** (local dev token `dev-admin-token`) → **Demo tools → Reset demo dataset** — builds
+   the shared dataset: 5 keys, ~30 days of simulated usage across all three providers, and a
+   built-in anomaly. This is the same one-click reset the public deployment uses, and it's what
+   every visitor sees — there's no per-visitor data.
+2. **Dashboard**, **Requests**, **Insights** — open in a private tab with no admin token. All
+   three are fully public: summary + charts + latency/error metrics, the per-request log, and
+   anomaly alerts with **Investigate** → ranked contributors → **View related requests**.
+3. **Playground** and the rest of **Admin** (create/revoke keys, budgets, providers) need the
+   token — paste a `vk_…` key from a key you create to send a few requests, or point an OpenAI
+   SDK at `http://localhost:8000/v1`.
+
+*(`Admin → Demo tools → Inject usage spike` is the smaller, older helper — it just adds a
+last-24h anomaly on top of whatever data already exists, without touching the rest.)*
 
 Reset everything (wipes the DB):
 
@@ -97,6 +109,12 @@ CI (`.github/workflows/ci.yml`) runs all of the above plus `docker build` on eve
 ```bash
 BASE=http://localhost:8000
 curl -s $BASE/healthz
+# public reads — no token
+curl -s $BASE/api/usage/summary
+curl -s $BASE/api/requests
+curl -s $BASE/api/insights/alerts
+# admin mutation without a token -> 403
+curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE/api/demo/reset
 # provider config status (admin)
 curl -s $BASE/api/providers -H 'X-Admin-Token: dev-admin-token'
 # create a key scoped to openai + openrouter
@@ -140,9 +158,12 @@ The only "cost" of the free tier is a ~30–60 s cold start after 15 min idle (R
 2. Push this repo to GitHub.
 3. Render → **New → Blueprint** → select the repo. It reads `render.yaml` and creates the
    Docker web service with generated `ADMIN_TOKEN` / `SECRET_KEY`.
-4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy.
-5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. The dashboard is
-   public; the admin token (Render → service → Environment) unlocks `/admin`.
+4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy. `render.yaml`
+   sets `SEED_DEMO_DATA=true`, so first boot builds the shared demo dataset automatically —
+   every visitor sees it immediately, no manual step needed.
+5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. Dashboard, Requests and
+   Insights are public; the admin token (Render → service → Environment) unlocks `/admin` and
+   `/playground`.
 
 **All-Render fallback:** uncomment the `databases:` block in `render.yaml`. Note Render's free
 Postgres is deleted 30 days after creation; the schema is recreated automatically but any keys
@@ -169,8 +190,9 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | `""` | Server-side provider creds. Blank ⇒ provider shows "not configured" and stays simulated. Never stored in the DB or shown in the UI. |
 | `ENABLE_LIVE` | `false` | Master switch for real upstream calls. Keep `false` for the public demo. |
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
-| `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the Requests tab. Off by default (bodies can be sensitive). |
+| `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the (public) Requests tab. Off by default and on the public deploy — bodies can be sensitive. |
 | `SIMULATE_LATENCY_SLEEP` | `true` | Simulator sleeps to mimic real latency. Tests set `false`. |
+| `SEED_DEMO_DATA` | `false` | On boot, if `usage_logs` is empty, build the shared demo dataset (same as *Admin → Demo tools → Reset demo dataset*). `true` on the public deploy so a fresh database self-populates; never overwrites existing data. |
 
 ---
 
@@ -183,13 +205,19 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | GET | `/api/providers` | `X-Admin-Token` | `[{provider, env_var, configured, valid, checked_at}]` (`?refresh=true` to re-check) |
 | POST | `/api/keys` | `X-Admin-Token` | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
 | GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | `X-Admin-Token` | list (+ `spend_period`) / patch any of the above (`clear_budget`) / revoke |
-| GET | `/api/requests` | `X-Admin-Token` | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
-| GET | `/api/insights/alerts` `\|` `/alerts/{id}` | `X-Admin-Token` | anomaly alerts / investigation (contributors + analysis + `related_query`) |
-| POST | `/api/insights/demo-spike` | `X-Admin-Token` | inject synthetic simulated usage with a deliberate 24h spike (demo helper) |
+| GET | `/api/requests` | — *(public)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
+| GET | `/api/insights/alerts` `\|` `/alerts/{id}` | — *(public)* | anomaly alerts / investigation (contributors + analysis + `related_query`) |
+| POST | `/api/insights/demo-spike` | `X-Admin-Token` | add a last-24h anomaly on top of existing data (small demo helper) |
+| POST | `/api/demo/reset` | `X-Admin-Token` | wipe **all** keys + usage and rebuild the deterministic shared demo dataset (5 keys, ~30 days, one built-in spike) — this is what every public visitor sees |
 | **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget, `403` provider not on key. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + per-provider `mode` (`simulated`/`live`) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
-| GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | — | dashboard aggregates (`start,end,provider,model,key_id`); `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
+| GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | — *(public)* | dashboard aggregates (`start,end,provider,model,key_id`); `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
+
+Public endpoints are read-only demo data — `LOG_BODIES=false` on the public deploy keeps prompt/
+response previews out of `/api/requests` regardless. Every other write (keys, budgets, providers,
+demo reset) requires `X-Admin-Token`, and the proxy (`/v1/*`) requires a `vk_…` key that only the
+admin can mint — so a public visitor has no path to modify the shared dataset.
 
 ---
 
@@ -210,6 +238,13 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 
 Provider credentials live only in server env vars — never in these tables, never sent to the
 browser. `/api/providers` reports presence + liveness as booleans only.
+
+**The demo dataset is shared, not per-user.** `POST /api/demo/reset` (`app/demo.py`) deletes every
+row and deterministically rebuilds 5 keys (Engineering, Data Science, Support Bot, Content Team,
+Mobile App) with ~30 days of simulated traffic across all three providers, a weekday/weekend
+pattern, a ~1.5% error rate, and a built-in last-24h cost spike on Engineering so Insights always
+has something to investigate. The demo keys' `key_hash` is random (`secrets.token_hex(32)`) and no
+raw key is ever produced — they exist only to own usage rows, not to authenticate anything.
 
 ---
 

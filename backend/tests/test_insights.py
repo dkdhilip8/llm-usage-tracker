@@ -42,8 +42,10 @@ def _rows(key_id: int, when: datetime, n: int, cost: float, tokens: int = 400) -
         db.commit()
 
 
-def test_insights_admin_gated(client):
-    assert client.get("/api/insights/alerts").status_code == 403
+def test_insights_read_public_write_gated(client):
+    # anomaly alerts are read-only demo data -> public
+    assert client.get("/api/insights/alerts").status_code == 200
+    # the demo-spike mutation stays admin-only
     assert client.post("/api/insights/demo-spike").status_code == 403
 
 

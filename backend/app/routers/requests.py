@@ -1,7 +1,7 @@
-"""Admin-only request log — recent `usage_logs` rows for the Requests tab.
+"""Public request log — recent `usage_logs` rows for the Requests tab.
 
-Admin-gated because rows can carry prompt/response previews (only when
-LOG_BODIES=true)."""
+Read-only and safe to expose on the shared demo: prompt/response previews are
+only populated when LOG_BODIES=true, which stays off on the public deploy."""
 
 from datetime import datetime
 
@@ -12,9 +12,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models import UsageLog, VirtualKey
-from app.security import require_admin
 
-router = APIRouter(prefix="/api", tags=["requests"], dependencies=[Depends(require_admin)])
+router = APIRouter(prefix="/api", tags=["requests"])
 
 
 @router.get("/requests")

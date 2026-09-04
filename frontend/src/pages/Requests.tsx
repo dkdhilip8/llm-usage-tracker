@@ -1,13 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, getAdminToken, type RequestRow } from "../lib/api";
+import { api, type RequestRow } from "../lib/api";
 import { Card } from "../components/Card";
 import { relTime, usd } from "../lib/format";
 
 const FILTER_KEYS = ["key_id", "provider", "model", "status", "mode", "start", "end"] as const;
 
 export function Requests() {
-  const hasToken = Boolean(getAdminToken());
   const navigate = useNavigate();
   const [params] = useSearchParams();
   const [rows, setRows] = useState<RequestRow[]>([]);
@@ -43,20 +42,8 @@ export function Requests() {
   );
 
   useEffect(() => {
-    if (hasToken) load(null);
-  }, [hasToken, load, filterKey]);
-
-  if (!hasToken) {
-    return (
-      <div className="mx-auto max-w-md">
-        <Card title="Requests">
-          <p className="text-sm text-fg-muted">
-            Enter the admin token on the <strong>Admin</strong> page to view the request log.
-          </p>
-        </Card>
-      </div>
-    );
-  }
+    load(null);
+  }, [load, filterKey]);
 
   return (
     <div className="space-y-4">

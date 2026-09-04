@@ -18,7 +18,15 @@ def test_admin_endpoints_require_token(client):
         ).status_code
         == 403
     )
-    assert client.get("/api/requests").status_code == 403
+    assert client.post("/api/demo/reset").status_code == 403
+    assert client.post("/api/insights/demo-spike").status_code == 403
+
+
+def test_public_endpoints_need_no_token(client):
+    # the shared demo: dashboard + request log + insights are open to everyone
+    assert client.get("/api/usage/summary").status_code == 200
+    assert client.get("/api/requests").status_code == 200
+    assert client.get("/api/insights/alerts").status_code == 200
 
 
 def test_key_create_list_hides_secret(client, admin, make_key):

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
+  getAdminToken,
   type ChatResult,
   type KeyInspect,
   type ModelInfo,
@@ -98,6 +99,23 @@ export function Playground() {
   }
 
   const ready = Boolean(key.trim() && inspect && provider && model && prompt.trim());
+
+  // The Playground sends requests through the gateway (it writes usage_logs and
+  // needs a vk_ key), so it is admin-only on the shared public demo.
+  if (!getAdminToken()) {
+    return (
+      <div className="mx-auto max-w-md">
+        <Card title="Playground">
+          <p className="text-sm text-fg-muted">
+            The Playground sends live requests through the gateway, so it is admin-only on
+            the public demo. Enter the admin token on the <strong>Admin</strong> page to use
+            it. The <strong>Dashboard</strong>, <strong>Requests</strong> and{" "}
+            <strong>Insights</strong> tabs are open to everyone.
+          </p>
+        </Card>
+      </div>
+    );
+  }
 
   return (
     <div className="grid gap-4 lg:grid-cols-[380px_1fr]">

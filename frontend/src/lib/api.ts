@@ -229,14 +229,19 @@ export const api = {
     req<{ status: string; version: string; live_enabled: boolean }>("/healthz"),
   models: () => req<ModelInfo[]>("/api/models"),
 
-  insights: () =>
-    req<{ alerts: InsightAlert[] }>("/api/insights/alerts", { headers: adminHeaders() }),
+  // public, read-only
+  insights: () => req<{ alerts: InsightAlert[] }>("/api/insights/alerts"),
   investigate: (id: string) =>
-    req<Investigation>(`/api/insights/alerts/${encodeURIComponent(id)}`, {
-      headers: adminHeaders(),
-    }),
+    req<Investigation>(`/api/insights/alerts/${encodeURIComponent(id)}`),
+
+  // admin-only demo-data controls
   injectDemoSpike: () =>
     req<{ inserted: number; key_label: string }>("/api/insights/demo-spike", {
+      method: "POST",
+      headers: adminHeaders(),
+    }),
+  resetDemo: () =>
+    req<{ keys: number; usage_rows: number; days: number }>("/api/demo/reset", {
       method: "POST",
       headers: adminHeaders(),
     }),
@@ -251,10 +256,10 @@ export const api = {
   usageByKey: (qs: string) => req<ByKeyRow[]>(`/api/usage/by-key${qs}`),
   usageByModel: (qs: string) => req<ByModelRow[]>(`/api/usage/by-model${qs}`),
 
+  // public, read-only
   listRequests: (qs: string) =>
     req<{ items: RequestRow[]; next_cursor: number | null; bodies_logged: boolean }>(
       `/api/requests${qs}`,
-      { headers: adminHeaders() },
     ),
 
   listKeys: () => req<KeyRow[]>("/api/keys", { headers: adminHeaders() }),

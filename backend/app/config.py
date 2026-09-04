@@ -39,7 +39,12 @@ class Settings(BaseSettings):
     # Simulator sleeps to mimic real latency. Tests set this false for speed.
     SIMULATE_LATENCY_SLEEP: bool = True
 
-    VERSION: str = "0.6.0"
+    # On boot, if usage_logs is empty, generate the shared demo dataset (keys +
+    # ~30 days of simulated usage + a recent anomaly). Set true on the public
+    # deploy so a fresh database self-populates; false locally and in tests.
+    SEED_DEMO_DATA: bool = False
+
+    VERSION: str = "0.7.0"
 
     @property
     def sqlalchemy_url(self) -> str:

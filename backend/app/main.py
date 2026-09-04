@@ -7,8 +7,8 @@ from fastapi.responses import FileResponse
 
 from app import providers
 from app.config import settings
-from app.db import Base, engine
-from app.routers import insights, keys, openai_compat, proxy, usage
+from app.db import Base, SessionLocal, engine
+from app.routers import demo, insights, keys, openai_compat, proxy, usage
 from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
@@ -19,6 +19,11 @@ STATIC_DIR = Path(__file__).parent / "static"
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     providers.warm_cache()  # best-effort liveness check for any configured provider
+    if settings.SEED_DEMO_DATA:
+        from app.demo import seed_if_empty
+
+        with SessionLocal() as db:
+            seed_if_empty(db)
     yield
 
 
@@ -52,6 +57,7 @@ app.include_router(openai_compat.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)
 app.include_router(insights.router)
+app.include_router(demo.router)
 app.include_router(usage.router)
 
 

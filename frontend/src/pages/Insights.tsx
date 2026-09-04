@@ -1,11 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import {
-  api,
-  getAdminToken,
-  type InsightAlert,
-  type Investigation,
-} from "../lib/api";
+import { api, type InsightAlert, type Investigation } from "../lib/api";
 import { Card } from "../components/Card";
 import { usd } from "../lib/format";
 
@@ -16,7 +11,6 @@ function fmtValue(metric: "cost" | "tokens", n: number): string {
 const MEDALS = ["🥇", "🥈", "🥉"];
 
 export function Insights() {
-  const hasToken = Boolean(getAdminToken());
   const navigate = useNavigate();
   const [alerts, setAlerts] = useState<InsightAlert[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,8 +28,8 @@ export function Insights() {
   }, []);
 
   useEffect(() => {
-    if (hasToken) load();
-  }, [hasToken, load]);
+    load();
+  }, [load]);
 
   async function investigate(alert: InsightAlert) {
     setAnalyzing(alert.id);
@@ -48,18 +42,6 @@ export function Insights() {
     } finally {
       setAnalyzing(null);
     }
-  }
-
-  if (!hasToken) {
-    return (
-      <div className="mx-auto max-w-md">
-        <Card title="Insights">
-          <p className="text-sm text-fg-muted">
-            Enter the admin token on the <strong>Admin</strong> page to view usage insights.
-          </p>
-        </Card>
-      </div>
-    );
   }
 
   if (selected) {

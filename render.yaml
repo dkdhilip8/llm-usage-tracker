@@ -19,6 +19,12 @@ services:
       # ENABLE_LIVE=true, add the provider key(s) below, and give a key `allow_live`.
       - key: ENABLE_LIVE
         value: "false"
+      # Populate the shared demo dataset on first boot (no-op once usage exists).
+      - key: SEED_DEMO_DATA
+        value: "true"
+      # Never store prompt/response bodies on the public deploy.
+      - key: LOG_BODIES
+        value: "false"
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
