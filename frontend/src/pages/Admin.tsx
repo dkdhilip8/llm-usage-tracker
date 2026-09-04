@@ -102,7 +102,6 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
   const [budgetPeriod, setBudgetPeriod] = useState<BudgetPeriod>("month");
   const [budgetStart, setBudgetStart] = useState("");
   const [budgetEnd, setBudgetEnd] = useState("");
-  const [expiresDays, setExpiresDays] = useState("");
   const [created, setCreated] = useState<KeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -123,13 +122,6 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
         budget_period: budgetPeriod,
         budget_start: budgetPeriod === "custom" ? budgetStart || null : null,
         budget_end: budgetPeriod === "custom" ? budgetEnd || null : null,
-        // custom keys expire when the budget window closes — derived server-side
-        expires_in_days:
-          budgetPeriod === "custom"
-            ? undefined
-            : expiresDays.trim()
-              ? Number(expiresDays)
-              : null,
       });
       setCreated(res);
       setCopied(false);
@@ -137,7 +129,6 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
       setBudget("");
       setBudgetStart("");
       setBudgetEnd("");
-      setExpiresDays("");
       onCreated();
     } catch (e) {
       setErr((e as Error).message);
@@ -210,61 +201,36 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
               value={budgetPeriod}
               onChange={(e) => setBudgetPeriod(e.target.value as BudgetPeriod)}
             >
-              <option value="day">per day</option>
-              <option value="week">per week</option>
-              <option value="month">per month</option>
-              <option value="custom">custom range…</option>
+              <option value="day">1 day</option>
+              <option value="week">1 week</option>
+              <option value="month">1 month</option>
+              <option value="custom">Custom range</option>
             </select>
-          </label>
-          <label className="text-xs font-medium text-fg-muted">
-            Expires
-            {budgetPeriod === "custom" ? (
-              <div className="mt-1 w-full rounded-md border border-line bg-fill px-2 py-1.5 text-sm text-fg-muted">
-                {budgetEnd
-                  ? new Date(budgetEnd).toLocaleDateString()
-                  : "— set a range"}
-              </div>
-            ) : (
-              <input
-                type="number"
-                min="1"
-                step="1"
-                placeholder="never"
-                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-                value={expiresDays}
-                onChange={(e) => setExpiresDays(e.target.value)}
-              />
-            )}
           </label>
         </div>
 
         {budgetPeriod === "custom" && (
-          <>
-            <div className="grid grid-cols-2 gap-2">
-              <label className="text-xs font-medium text-fg-muted">
-                Budget from
-                <input
-                  type="date"
-                  className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-                  value={budgetStart}
-                  onChange={(e) => setBudgetStart(e.target.value)}
-                />
-              </label>
-              <label className="text-xs font-medium text-fg-muted">
-                to (inclusive)
-                <input
-                  type="date"
-                  min={budgetStart || undefined}
-                  className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-                  value={budgetEnd}
-                  onChange={(e) => setBudgetEnd(e.target.value)}
-                />
-              </label>
-            </div>
-            <p className="text-[11px] text-fg-subtle">
-              The key expires when the budget window closes.
-            </p>
-          </>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs font-medium text-fg-muted">
+              Budget from
+              <input
+                type="date"
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                value={budgetStart}
+                onChange={(e) => setBudgetStart(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-fg-muted">
+              to (inclusive)
+              <input
+                type="date"
+                min={budgetStart || undefined}
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                value={budgetEnd}
+                onChange={(e) => setBudgetEnd(e.target.value)}
+              />
+            </label>
+          </div>
         )}
 
         <label className="flex items-center gap-2 text-sm text-fg-muted">
@@ -439,7 +405,6 @@ export function Admin() {
                 <th className="py-2 pr-4 text-right">Requests</th>
                 <th className="py-2 pr-4 text-right">Cost</th>
                 <th className="py-2 pr-4">Budget</th>
-                <th className="py-2 pr-4">Expires</th>
                 <th className="py-2 pr-4">Last used</th>
                 <th className="py-2 pr-0 text-right">Status</th>
               </tr>
@@ -447,7 +412,7 @@ export function Admin() {
             <tbody>
               {keys.length === 0 && (
                 <tr>
-                  <td colSpan={10} className="py-8 text-center text-fg-subtle">
+                  <td colSpan={9} className="py-8 text-center text-fg-subtle">
                     No keys yet — create one above.
                   </td>
                 </tr>
@@ -540,24 +505,6 @@ export function Admin() {
                         </div>
                       </div>
                     )}
-                  </td>
-                  <td className="py-2 pr-4">
-                    <div className="flex flex-wrap gap-1 text-[10px]">
-                      {k.expires_at && (
-                        <span
-                          className={`rounded px-1.5 py-0.5 ${
-                            new Date(k.expires_at) <= new Date()
-                              ? "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400"
-                              : "bg-fill text-fg-muted"
-                          }`}
-                        >
-                          exp {new Date(k.expires_at).toLocaleDateString()}
-                        </span>
-                      )}
-                      {!k.expires_at && (
-                        <span className="text-fg-subtle">—</span>
-                      )}
-                    </div>
                   </td>
                   <td className="py-2 pr-4 text-xs text-fg-subtle">
                     {relTime(k.last_used_at)}

@@ -38,8 +38,6 @@ class VirtualKey(Base):
     # For budget_period == "custom": the fixed [start, end) the cap applies to.
     budget_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     budget_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    # Auto-expiry. Null = never. Past -> the key stops authenticating (401).
-    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

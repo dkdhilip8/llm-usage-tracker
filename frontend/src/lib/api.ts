@@ -69,7 +69,6 @@ export interface KeyRow {
   budget_period: BudgetPeriod;
   budget_start: string | null;
   budget_end: string | null;
-  expires_at: string | null;
   spend_period: number;
   created_at: string;
   last_used_at: string | null;
@@ -91,7 +90,6 @@ export interface KeyCreated {
   budget_period: BudgetPeriod;
   budget_start: string | null;
   budget_end: string | null;
-  expires_at: string | null;
   created_at: string;
 }
 
@@ -269,7 +267,6 @@ export const api = {
     budget_period?: BudgetPeriod;
     budget_start?: string | null;
     budget_end?: string | null;
-    expires_in_days?: number | null;
   }) =>
     req<KeyCreated>("/api/keys", {
       method: "POST",
@@ -285,9 +282,7 @@ export const api = {
       budget_period?: BudgetPeriod;
       budget_start?: string | null;
       budget_end?: string | null;
-      expires_in_days?: number | null;
       clear_budget?: boolean;
-      clear_expiry?: boolean;
     },
   ) =>
     req<Record<string, unknown>>(`/api/keys/${id}`, {

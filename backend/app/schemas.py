@@ -16,7 +16,6 @@ class KeyCreate(BaseModel):
     budget_period: BudgetPeriod = "month"
     budget_start: date | None = None  # required when budget_period == "custom"
     budget_end: date | None = None  # inclusive end date
-    expires_in_days: int | None = Field(default=None, ge=1)
 
 
 class KeyUpdate(BaseModel):
@@ -26,9 +25,7 @@ class KeyUpdate(BaseModel):
     budget_period: BudgetPeriod | None = None
     budget_start: date | None = None
     budget_end: date | None = None
-    expires_in_days: int | None = Field(default=None, ge=1)
     clear_budget: bool = False
-    clear_expiry: bool = False
 
 
 class KeyCreated(BaseModel):
@@ -43,7 +40,6 @@ class KeyCreated(BaseModel):
     budget_period: str
     budget_start: datetime | None
     budget_end: datetime | None
-    expires_at: datetime | None
     created_at: datetime
 
 
@@ -58,7 +54,6 @@ class KeyOut(BaseModel):
     budget_period: str
     budget_start: datetime | None
     budget_end: datetime | None
-    expires_at: datetime | None
     spend_period: float
     created_at: datetime
     last_used_at: datetime | None

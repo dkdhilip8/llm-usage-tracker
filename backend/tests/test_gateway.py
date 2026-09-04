@@ -196,12 +196,8 @@ def test_custom_budget_window(client, admin, make_key):
     rows = client.get("/api/keys", headers=admin).json()
     assert rows[0]["budget_period"] == "custom"
     assert rows[0]["budget_start"] and rows[0]["budget_end"]
-    # a custom-range key expires when its window closes
-    assert rows[0]["expires_at"] == rows[0]["budget_end"]
-    assert k["expires_at"] == k["budget_end"]
 
-    # window entirely in the past -> expires_at is the range end, so the key is
-    # already expired (401) rather than merely uncapped
+    # window entirely in the past -> cap no longer applies
     k2 = make_key(
         allowed_providers=["openrouter"],
         monthly_budget_usd=0,
@@ -209,8 +205,7 @@ def test_custom_budget_window(client, admin, make_key):
         budget_start=str(today - _dt.timedelta(days=10)),
         budget_end=str(today - _dt.timedelta(days=5)),
     )
-    assert k2["expires_at"] == k2["budget_end"]
-    assert _chat(client, k2["key"]).status_code == 401
+    assert _chat(client, k2["key"]).status_code == 200
 
 
 def test_custom_budget_requires_dates(client, admin):
@@ -224,24 +219,3 @@ def test_custom_budget_requires_dates(client, admin):
         headers=admin,
     )
     assert r.status_code == 422
-
-
-def test_expired_key_401(client, make_key):
-    import datetime as _dt
-
-    from app.db import SessionLocal
-    from app.models import VirtualKey
-
-    k = make_key(allowed_providers=["openrouter"])
-    with SessionLocal() as db:
-        vk = db.get(VirtualKey, k["id"])
-        vk.expires_at = _dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=1)
-        db.commit()
-    assert _chat(client, k["key"]).status_code == 401
-
-
-def test_key_expiry_via_create(client, admin, make_key):
-    k = make_key(allowed_providers=["openrouter"], expires_in_days=7)
-    assert k["expires_at"] is not None
-    rows = client.get("/api/keys", headers=admin).json()
-    assert rows[0]["expires_at"] is not None
