@@ -181,8 +181,8 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | GET | `/healthz` | — | health / warmup |
 | GET | `/api/models` | — | configured pricing table (per provider/model) |
 | GET | `/api/providers` | `X-Admin-Token` | `[{provider, env_var, configured, valid, checked_at}]` (`?refresh=true` to re-check) |
-| POST | `/api/keys` | `X-Admin-Token` | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?}` → raw key shown once |
-| GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | `X-Admin-Token` | list (+ `spend_month`) / `{allow_live, default_provider, monthly_budget_usd, clear_budget}` / revoke |
+| POST | `/api/keys` | `X-Admin-Token` | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month), rpm_limit?, expires_in_days?}` → raw key once |
+| GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | `X-Admin-Token` | list (+ `spend_period`) / patch any of the above (`clear_budget` / `clear_rpm_limit` / `clear_expiry`) / revoke |
 | GET | `/api/requests` | `X-Admin-Token` | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
 | GET | `/api/insights/alerts` `\|` `/alerts/{id}` | `X-Admin-Token` | anomaly alerts / investigation (contributors + analysis + `related_query`) |
 | POST | `/api/insights/demo-spike` | `X-Admin-Token` | inject synthetic simulated usage with a deliberate 24h spike (demo helper) |
@@ -196,9 +196,11 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 ## Data model
 
 - **virtual_keys** — `id, label, key_hash, key_prefix, allow_live, default_provider,
-  monthly_budget_usd, created_at, last_used_at, revoked_at`. Only the HMAC hash and an 11-char
-  prefix are stored; the raw key is shown once. `monthly_budget_usd` → `402` once month-to-date
-  spend reaches it.
+  monthly_budget_usd, budget_period, rpm_limit, expires_at, created_at, last_used_at,
+  revoked_at`. Only the HMAC hash and an 11-char prefix are stored; the raw key is shown once.
+  Per-key policy: **budget** (`$X` per `day`/`week`/`month` → `402` when spent), **rate limit**
+  (`rpm_limit` → `429`, in-process sliding window, single-instance), **expiry** (`expires_at`
+  past → `401`).
 - **allowed_providers** — `(virtual_key_id, provider)`, unique. The per-key provider ACL enforced
   on every proxied request.
 - **usage_logs** — `id, key_id, request_id, provider, model, prompt_tokens, completion_tokens,
@@ -213,7 +215,8 @@ browser. `/api/providers` reports presence + liveness as booleans only.
 
 ## Future improvements
 
-Per-key rate limits (RPM) · webhook/Slack alerts + scheduled anomaly detection · LLM-written
-insight narratives · Prometheus `/metrics` · pricing catalog auto-synced from OpenRouter
-`/api/v1/models` · exact-match response cache · provider fallback on live error · Alembic
-migrations + backups · Redis for shared counters · SSO / org hierarchy · OpenTelemetry traces.
+Token-per-minute limits · per-model budgets · webhook/Slack alerts + scheduled anomaly detection ·
+LLM-written insight narratives · Prometheus `/metrics` · pricing catalog auto-synced from
+OpenRouter `/api/v1/models` · exact-match response cache · provider fallback on live error ·
+Alembic migrations + backups · Redis for shared rate-limit / budget counters · SSO / org
+hierarchy · OpenTelemetry traces.

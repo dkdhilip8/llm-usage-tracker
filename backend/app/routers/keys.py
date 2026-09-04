@@ -1,11 +1,11 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.db import get_db
-from app.gateway import month_spend
+from app.gateway import period_spend
 from app.models import AllowedProvider, UsageLog, VirtualKey
 from app.providers import SUPPORTED
 from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUpdate
@@ -26,6 +26,10 @@ def _validate_providers(names: list[str]) -> list[str]:
     return providers
 
 
+def _budget(v) -> float | None:
+    return float(v) if v is not None else None
+
+
 @router.post("", response_model=KeyCreated)
 def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
     label = body.label.strip()
@@ -43,6 +47,13 @@ def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
         allow_live=body.allow_live,
         default_provider=body.default_provider,
         monthly_budget_usd=body.monthly_budget_usd,
+        budget_period=body.budget_period,
+        rpm_limit=body.rpm_limit,
+        expires_at=(
+            datetime.now(UTC) + timedelta(days=body.expires_in_days)
+            if body.expires_in_days
+            else None
+        ),
         allowed_providers=[AllowedProvider(provider=p) for p in providers],
     )
     db.add(vk)
@@ -56,9 +67,10 @@ def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
         allowed_providers=vk.provider_names(),
         allow_live=vk.allow_live,
         default_provider=vk.default_provider,
-        monthly_budget_usd=(
-            float(vk.monthly_budget_usd) if vk.monthly_budget_usd is not None else None
-        ),
+        monthly_budget_usd=_budget(vk.monthly_budget_usd),
+        budget_period=vk.budget_period,
+        rpm_limit=vk.rpm_limit,
+        expires_at=vk.expires_at,
         created_at=vk.created_at,
     )
 
@@ -90,12 +102,11 @@ def list_keys(db: Session = Depends(get_db)) -> list[KeyOut]:
                 allowed_providers=k.provider_names(),
                 allow_live=k.allow_live,
                 default_provider=k.default_provider,
-                monthly_budget_usd=(
-                    float(k.monthly_budget_usd)
-                    if k.monthly_budget_usd is not None
-                    else None
-                ),
-                spend_month=month_spend(db, k.id),
+                monthly_budget_usd=_budget(k.monthly_budget_usd),
+                budget_period=k.budget_period,
+                rpm_limit=k.rpm_limit,
+                expires_at=k.expires_at,
+                spend_period=period_spend(db, k),
                 created_at=k.created_at,
                 last_used_at=k.last_used_at,
                 revoked_at=k.revoked_at,
@@ -118,18 +129,29 @@ def update_key(key_id: int, body: KeyUpdate, db: Session = Depends(get_db)) -> d
         if body.default_provider and body.default_provider not in vk.provider_names():
             raise HTTPException(422, "default_provider must be one of allowed_providers")
         vk.default_provider = body.default_provider or None
+    if body.budget_period is not None:
+        vk.budget_period = body.budget_period
     if body.clear_budget:
         vk.monthly_budget_usd = None
     elif body.monthly_budget_usd is not None:
         vk.monthly_budget_usd = body.monthly_budget_usd
+    if body.clear_rpm_limit:
+        vk.rpm_limit = None
+    elif body.rpm_limit is not None:
+        vk.rpm_limit = body.rpm_limit
+    if body.clear_expiry:
+        vk.expires_at = None
+    elif body.expires_in_days is not None:
+        vk.expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
     db.commit()
     return {
         "id": vk.id,
         "allow_live": vk.allow_live,
         "default_provider": vk.default_provider,
-        "monthly_budget_usd": (
-            float(vk.monthly_budget_usd) if vk.monthly_budget_usd is not None else None
-        ),
+        "monthly_budget_usd": _budget(vk.monthly_budget_usd),
+        "budget_period": vk.budget_period,
+        "rpm_limit": vk.rpm_limit,
+        "expires_at": vk.expires_at.isoformat() if vk.expires_at else None,
     }
 
 

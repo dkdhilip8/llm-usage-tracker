@@ -31,8 +31,14 @@ class VirtualKey(Base):
     allow_live: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Provider used when an OpenAI-compatible request sends a bare model name (no "provider/" prefix).
     default_provider: Mapped[str | None] = mapped_column(String)
-    # Month-to-date spend cap (USD). Null = unlimited. Over budget -> 402 budget_exceeded.
+    # Spend cap (USD) per budget_period. Null = unlimited. Over budget -> 402 budget_exceeded.
     monthly_budget_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
+    # Rolling window for the spend cap: "day" | "week" | "month".
+    budget_period: Mapped[str] = mapped_column(String, nullable=False, default="month")
+    # Requests-per-minute cap (in-process sliding window). Null = unlimited. Over -> 429.
+    rpm_limit: Mapped[int | None] = mapped_column(Integer)
+    # Auto-expiry. Null = never. Past -> the key stops authenticating (401).
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

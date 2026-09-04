@@ -56,6 +56,8 @@ export interface ProviderStatus {
   checked_at: string | null;
 }
 
+export type BudgetPeriod = "day" | "week" | "month";
+
 export interface KeyRow {
   id: number;
   label: string;
@@ -64,7 +66,10 @@ export interface KeyRow {
   allow_live: boolean;
   default_provider: string | null;
   monthly_budget_usd: number | null;
-  spend_month: number;
+  budget_period: BudgetPeriod;
+  rpm_limit: number | null;
+  expires_at: string | null;
+  spend_period: number;
   created_at: string;
   last_used_at: string | null;
   revoked_at: string | null;
@@ -82,6 +87,9 @@ export interface KeyCreated {
   allow_live: boolean;
   default_provider: string | null;
   monthly_budget_usd: number | null;
+  budget_period: BudgetPeriod;
+  rpm_limit: number | null;
+  expires_at: string | null;
   created_at: string;
 }
 
@@ -256,6 +264,9 @@ export const api = {
     allow_live: boolean;
     default_provider?: string | null;
     monthly_budget_usd?: number | null;
+    budget_period?: BudgetPeriod;
+    rpm_limit?: number | null;
+    expires_in_days?: number | null;
   }) =>
     req<KeyCreated>("/api/keys", {
       method: "POST",
@@ -268,7 +279,12 @@ export const api = {
       allow_live?: boolean;
       default_provider?: string | null;
       monthly_budget_usd?: number | null;
+      budget_period?: BudgetPeriod;
+      rpm_limit?: number | null;
+      expires_in_days?: number | null;
       clear_budget?: boolean;
+      clear_rpm_limit?: boolean;
+      clear_expiry?: boolean;
     },
   ) =>
     req<Record<string, unknown>>(`/api/keys/${id}`, {

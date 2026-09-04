@@ -4,6 +4,7 @@ import {
   getAdminToken,
   PROVIDERS,
   setAdminToken,
+  type BudgetPeriod,
   type KeyCreated,
   type KeyRow,
   type ProviderStatus,
@@ -98,6 +99,9 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
   const [allowLive, setAllowLive] = useState(false);
   const [defaultProvider, setDefaultProvider] = useState("");
   const [budget, setBudget] = useState("");
+  const [budgetPeriod, setBudgetPeriod] = useState<BudgetPeriod>("month");
+  const [rpm, setRpm] = useState("");
+  const [expiresDays, setExpiresDays] = useState("");
   const [created, setCreated] = useState<KeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -115,11 +119,16 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
         allow_live: allowLive,
         default_provider: defaultProvider || null,
         monthly_budget_usd: budget.trim() ? Number(budget) : null,
+        budget_period: budgetPeriod,
+        rpm_limit: rpm.trim() ? Number(rpm) : null,
+        expires_in_days: expiresDays.trim() ? Number(expiresDays) : null,
       });
       setCreated(res);
       setCopied(false);
       setLabel("");
       setBudget("");
+      setRpm("");
+      setExpiresDays("");
       onCreated();
     } catch (e) {
       setErr((e as Error).message);
@@ -171,7 +180,7 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
             </select>
           </label>
           <label className="text-xs font-medium text-fg-muted">
-            Monthly budget (USD)
+            Budget (USD)
             <input
               type="number"
               step="0.01"
@@ -180,6 +189,45 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
               className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
               value={budget}
               onChange={(e) => setBudget(e.target.value)}
+            />
+          </label>
+        </div>
+
+        <div className="grid grid-cols-3 gap-2">
+          <label className="text-xs font-medium text-fg-muted">
+            Budget period
+            <select
+              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+              value={budgetPeriod}
+              onChange={(e) => setBudgetPeriod(e.target.value as BudgetPeriod)}
+            >
+              <option value="day">per day</option>
+              <option value="week">per week</option>
+              <option value="month">per month</option>
+            </select>
+          </label>
+          <label className="text-xs font-medium text-fg-muted">
+            Rate limit (req/min)
+            <input
+              type="number"
+              min="1"
+              step="1"
+              placeholder="none"
+              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+              value={rpm}
+              onChange={(e) => setRpm(e.target.value)}
+            />
+          </label>
+          <label className="text-xs font-medium text-fg-muted">
+            Expires (days)
+            <input
+              type="number"
+              min="1"
+              step="1"
+              placeholder="never"
+              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+              value={expiresDays}
+              onChange={(e) => setExpiresDays(e.target.value)}
             />
           </label>
         </div>
@@ -355,7 +403,8 @@ export function Admin() {
                 <th className="py-2 pr-4 text-center">Live</th>
                 <th className="py-2 pr-4 text-right">Requests</th>
                 <th className="py-2 pr-4 text-right">Cost</th>
-                <th className="py-2 pr-4">Budget (mo)</th>
+                <th className="py-2 pr-4">Budget</th>
+                <th className="py-2 pr-4">Limits</th>
                 <th className="py-2 pr-4">Last used</th>
                 <th className="py-2 pr-0 text-right">Status</th>
               </tr>
@@ -363,7 +412,7 @@ export function Admin() {
             <tbody>
               {keys.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-fg-subtle">
+                  <td colSpan={10} className="py-8 text-center text-fg-subtle">
                     No keys yet — create one above.
                   </td>
                 </tr>
@@ -421,13 +470,15 @@ export function Admin() {
                     ) : (
                       <div className="w-28">
                         <div className="flex justify-between text-[10px] text-fg-subtle">
-                          <span>{usd(k.spend_month)}</span>
-                          <span>{usd(k.monthly_budget_usd)}</span>
+                          <span>{usd(k.spend_period)}</span>
+                          <span>
+                            {usd(k.monthly_budget_usd)}/{k.budget_period[0]}
+                          </span>
                         </div>
                         <div className="mt-0.5 h-1.5 rounded bg-fill">
                           <div
                             className={`h-1.5 rounded ${
-                              k.spend_month >= k.monthly_budget_usd
+                              k.spend_period >= k.monthly_budget_usd
                                 ? "bg-red-500"
                                 : "bg-brand-500"
                             }`}
@@ -435,7 +486,7 @@ export function Admin() {
                               width: `${Math.min(
                                 100,
                                 k.monthly_budget_usd > 0
-                                  ? (k.spend_month / k.monthly_budget_usd) * 100
+                                  ? (k.spend_period / k.monthly_budget_usd) * 100
                                   : 100,
                               )}%`,
                             }}
@@ -443,6 +494,29 @@ export function Admin() {
                         </div>
                       </div>
                     )}
+                  </td>
+                  <td className="py-2 pr-4">
+                    <div className="flex flex-wrap gap-1 text-[10px]">
+                      {k.rpm_limit != null && (
+                        <span className="rounded bg-fill px-1.5 py-0.5 text-fg-muted">
+                          {k.rpm_limit} rpm
+                        </span>
+                      )}
+                      {k.expires_at && (
+                        <span
+                          className={`rounded px-1.5 py-0.5 ${
+                            new Date(k.expires_at) <= new Date()
+                              ? "bg-red-100 text-red-700 dark:bg-red-500/15 dark:text-red-400"
+                              : "bg-fill text-fg-muted"
+                          }`}
+                        >
+                          exp {new Date(k.expires_at).toLocaleDateString()}
+                        </span>
+                      )}
+                      {k.rpm_limit == null && !k.expires_at && (
+                        <span className="text-fg-subtle">—</span>
+                      )}
+                    </div>
                   </td>
                   <td className="py-2 pr-4 text-xs text-fg-subtle">
                     {relTime(k.last_used_at)}

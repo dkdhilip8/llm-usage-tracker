@@ -26,7 +26,8 @@ def test_key_create_list_hides_secret(client, admin, make_key):
     assert k["key"].startswith("vk_")
     rows = client.get("/api/keys", headers=admin).json()
     assert rows and "key_hash" not in rows[0] and "key" not in rows[0]
-    assert rows[0]["spend_month"] == 0
+    assert rows[0]["spend_period"] == 0
+    assert rows[0]["budget_period"] == "month"
 
 
 def test_proxy_requires_bearer(client):
@@ -156,3 +157,53 @@ def test_revoked_key_rejected(client, admin, make_key):
         headers=_bearer(k["key"]),
     )
     assert r.status_code == 401
+
+
+def _chat(client, key: str, model: str = OR_MODEL):
+    return client.post(
+        "/v1/proxy/chat",
+        json={"provider": "openrouter", "model": model, "prompt": "hi"},
+        headers=_bearer(key),
+    )
+
+
+def test_rate_limit_429(client, make_key):
+    k = make_key(allowed_providers=["openrouter"], rpm_limit=2)
+    assert _chat(client, k["key"]).status_code == 200
+    assert _chat(client, k["key"]).status_code == 200
+    r = _chat(client, k["key"])
+    assert r.status_code == 429
+    assert r.json()["detail"]["type"] == "rate_limit_exceeded"
+    assert "retry-after" in {h.lower() for h in r.headers}
+
+
+def test_budget_period_stored_and_used(client, admin, make_key):
+    k = make_key(
+        allowed_providers=["openrouter"], monthly_budget_usd=0, budget_period="day"
+    )
+    r = _chat(client, k["key"])
+    assert r.status_code == 402
+    assert "per day" in r.json()["detail"]["message"]
+    rows = client.get("/api/keys", headers=admin).json()
+    assert rows[0]["budget_period"] == "day"
+
+
+def test_expired_key_401(client, make_key):
+    import datetime as _dt
+
+    from app.db import SessionLocal
+    from app.models import VirtualKey
+
+    k = make_key(allowed_providers=["openrouter"])
+    with SessionLocal() as db:
+        vk = db.get(VirtualKey, k["id"])
+        vk.expires_at = _dt.datetime.now(_dt.UTC) - _dt.timedelta(hours=1)
+        db.commit()
+    assert _chat(client, k["key"]).status_code == 401
+
+
+def test_key_expiry_via_create(client, admin, make_key):
+    k = make_key(allowed_providers=["openrouter"], expires_in_days=7)
+    assert k["expires_at"] is not None
+    rows = client.get("/api/keys", headers=admin).json()
+    assert rows[0]["expires_at"] is not None

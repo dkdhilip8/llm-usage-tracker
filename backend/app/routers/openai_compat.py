@@ -25,6 +25,7 @@ from app.db import get_db
 from app.gateway import (
     CompletionResult,
     enforce_budget,
+    enforce_rate_limit,
     record_usage,
     record_usage_detached,
     resolve_target,
@@ -75,6 +76,7 @@ def chat_completions(
     prompt = _prompt_from_messages(body.messages)
     if not prompt:
         raise HTTPException(422, "messages must contain user text content")
+    enforce_rate_limit(vk)
     enforce_budget(db, vk)
 
     cid = f"chatcmpl-{uuid4().hex}"
