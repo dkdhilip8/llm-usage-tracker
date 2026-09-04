@@ -123,7 +123,13 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
         budget_period: budgetPeriod,
         budget_start: budgetPeriod === "custom" ? budgetStart || null : null,
         budget_end: budgetPeriod === "custom" ? budgetEnd || null : null,
-        expires_in_days: expiresDays.trim() ? Number(expiresDays) : null,
+        // custom keys expire when the budget window closes — derived server-side
+        expires_in_days:
+          budgetPeriod === "custom"
+            ? undefined
+            : expiresDays.trim()
+              ? Number(expiresDays)
+              : null,
       });
       setCreated(res);
       setCopied(false);
@@ -211,41 +217,54 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
             </select>
           </label>
           <label className="text-xs font-medium text-fg-muted">
-            Expires (days)
-            <input
-              type="number"
-              min="1"
-              step="1"
-              placeholder="never"
-              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-              value={expiresDays}
-              onChange={(e) => setExpiresDays(e.target.value)}
-            />
+            Expires
+            {budgetPeriod === "custom" ? (
+              <div className="mt-1 w-full rounded-md border border-line bg-fill px-2 py-1.5 text-sm text-fg-muted">
+                {budgetEnd
+                  ? new Date(budgetEnd).toLocaleDateString()
+                  : "— set a range"}
+              </div>
+            ) : (
+              <input
+                type="number"
+                min="1"
+                step="1"
+                placeholder="never"
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                value={expiresDays}
+                onChange={(e) => setExpiresDays(e.target.value)}
+              />
+            )}
           </label>
         </div>
 
         {budgetPeriod === "custom" && (
-          <div className="grid grid-cols-2 gap-2">
-            <label className="text-xs font-medium text-fg-muted">
-              Budget from
-              <input
-                type="date"
-                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-                value={budgetStart}
-                onChange={(e) => setBudgetStart(e.target.value)}
-              />
-            </label>
-            <label className="text-xs font-medium text-fg-muted">
-              to (inclusive)
-              <input
-                type="date"
-                min={budgetStart || undefined}
-                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-                value={budgetEnd}
-                onChange={(e) => setBudgetEnd(e.target.value)}
-              />
-            </label>
-          </div>
+          <>
+            <div className="grid grid-cols-2 gap-2">
+              <label className="text-xs font-medium text-fg-muted">
+                Budget from
+                <input
+                  type="date"
+                  className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                  value={budgetStart}
+                  onChange={(e) => setBudgetStart(e.target.value)}
+                />
+              </label>
+              <label className="text-xs font-medium text-fg-muted">
+                to (inclusive)
+                <input
+                  type="date"
+                  min={budgetStart || undefined}
+                  className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                  value={budgetEnd}
+                  onChange={(e) => setBudgetEnd(e.target.value)}
+                />
+              </label>
+            </div>
+            <p className="text-[11px] text-fg-subtle">
+              The key expires when the budget window closes.
+            </p>
+          </>
         )}
 
         <label className="flex items-center gap-2 text-sm text-fg-muted">

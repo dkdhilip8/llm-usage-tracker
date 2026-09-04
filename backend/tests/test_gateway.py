@@ -196,8 +196,12 @@ def test_custom_budget_window(client, admin, make_key):
     rows = client.get("/api/keys", headers=admin).json()
     assert rows[0]["budget_period"] == "custom"
     assert rows[0]["budget_start"] and rows[0]["budget_end"]
+    # a custom-range key expires when its window closes
+    assert rows[0]["expires_at"] == rows[0]["budget_end"]
+    assert k["expires_at"] == k["budget_end"]
 
-    # window entirely in the past -> cap no longer applies
+    # window entirely in the past -> expires_at is the range end, so the key is
+    # already expired (401) rather than merely uncapped
     k2 = make_key(
         allowed_providers=["openrouter"],
         monthly_budget_usd=0,
@@ -205,7 +209,8 @@ def test_custom_budget_window(client, admin, make_key):
         budget_start=str(today - _dt.timedelta(days=10)),
         budget_end=str(today - _dt.timedelta(days=5)),
     )
-    assert _chat(client, k2["key"]).status_code == 200
+    assert k2["expires_at"] == k2["budget_end"]
+    assert _chat(client, k2["key"]).status_code == 401
 
 
 def test_custom_budget_requires_dates(client, admin):

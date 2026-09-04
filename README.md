@@ -181,7 +181,7 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | GET | `/healthz` | — | health / warmup |
 | GET | `/api/models` | — | configured pricing table (per provider/model) |
 | GET | `/api/providers` | `X-Admin-Token` | `[{provider, env_var, configured, valid, checked_at}]` (`?refresh=true` to re-check) |
-| POST | `/api/keys` | `X-Admin-Token` | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?, expires_in_days?}` → raw key once |
+| POST | `/api/keys` | `X-Admin-Token` | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?, expires_in_days?}` → raw key once. A `custom` range forces `expires_at` = range end (ignores `expires_in_days`). |
 | GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | `X-Admin-Token` | list (+ `spend_period`) / patch any of the above (`clear_budget` / `clear_expiry`) / revoke |
 | GET | `/api/requests` | `X-Admin-Token` | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
 | GET | `/api/insights/alerts` `\|` `/alerts/{id}` | `X-Admin-Token` | anomaly alerts / investigation (contributors + analysis + `related_query`) |
@@ -200,7 +200,9 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
   last_used_at, revoked_at`. Only the HMAC hash and an 11-char prefix are stored; the raw key is
   shown once. Per-key policy: **budget** — `$X` per `day`/`week`/`month` (rolling), or a
   `custom` fixed `[budget_start, budget_end]` range → `402` when spent (outside a custom range
-  the cap doesn't apply); **expiry** — `expires_at` past → `401`.
+  the cap doesn't apply); **expiry** — `expires_at` past → `401`. For a `custom` range,
+  `expires_at` is set automatically to the range end (the form shows it read-only) — the key
+  dies when its window closes.
 - **allowed_providers** — `(virtual_key_id, provider)`, unique. The per-key provider ACL enforced
   on every proxied request.
 - **usage_logs** — `id, key_id, request_id, provider, model, prompt_tokens, completion_tokens,

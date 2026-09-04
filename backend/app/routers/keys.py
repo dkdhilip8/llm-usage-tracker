@@ -54,6 +54,12 @@ def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
     b_start = b_end = None
     if body.budget_period == "custom":
         b_start, b_end = _custom_window(body)
+        # a custom-range key expires when its budget window closes
+        expires_at = b_end
+    elif body.expires_in_days:
+        expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
+    else:
+        expires_at = None
 
     raw, hashed, prefix = new_key()
     vk = VirtualKey(
@@ -66,11 +72,7 @@ def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
         budget_period=body.budget_period,
         budget_start=b_start,
         budget_end=b_end,
-        expires_at=(
-            datetime.now(UTC) + timedelta(days=body.expires_in_days)
-            if body.expires_in_days
-            else None
-        ),
+        expires_at=expires_at,
         allowed_providers=[AllowedProvider(provider=p) for p in providers],
     )
     db.add(vk)
@@ -126,6 +128,7 @@ def update_key(key_id: int, body: KeyUpdate, db: Session = Depends(get_db)) -> d
     vk = db.get(VirtualKey, key_id)
     if vk is None:
         raise HTTPException(404, "key not found")
+    prev_period = vk.budget_period
     if body.allow_live is not None:
         vk.allow_live = body.allow_live
     if body.default_provider is not None:
@@ -142,10 +145,17 @@ def update_key(key_id: int, body: KeyUpdate, db: Session = Depends(get_db)) -> d
         vk.monthly_budget_usd = None
     elif body.monthly_budget_usd is not None:
         vk.monthly_budget_usd = body.monthly_budget_usd
-    if body.clear_expiry:
+
+    # For a custom range, expiry always follows the window end. Otherwise it's set
+    # independently; leaving a custom range releases the range-linked expiry.
+    if vk.budget_period == "custom":
+        vk.expires_at = vk.budget_end
+    elif body.clear_expiry:
         vk.expires_at = None
     elif body.expires_in_days is not None:
         vk.expires_at = datetime.now(UTC) + timedelta(days=body.expires_in_days)
+    elif prev_period == "custom":
+        vk.expires_at = None
     db.commit()
     return {
         "id": vk.id,
