@@ -11,12 +11,12 @@ function Stat({
   sub?: string;
 }) {
   return (
-    <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="text-xs font-medium uppercase tracking-wide text-slate-500">
+    <div className="rounded-xl border border-line bg-surface p-4 shadow-sm">
+      <div className="text-xs font-medium uppercase tracking-wide text-fg-muted">
         {label}
       </div>
-      <div className="mt-2 text-2xl font-semibold text-slate-900">{value}</div>
-      {sub && <div className="mt-1 text-xs text-slate-400">{sub}</div>}
+      <div className="mt-2 text-2xl font-semibold text-fg">{value}</div>
+      {sub && <div className="mt-1 text-xs text-fg-subtle">{sub}</div>}
     </div>
   );
 }
@@ -34,7 +34,7 @@ export function SummaryCards({
         {Array.from({ length: 4 }).map((_, i) => (
           <div
             key={i}
-            className="h-[92px] animate-pulse rounded-xl border border-slate-200 bg-white"
+            className="h-[92px] animate-pulse rounded-xl border border-line bg-surface"
           />
         ))}
       </div>

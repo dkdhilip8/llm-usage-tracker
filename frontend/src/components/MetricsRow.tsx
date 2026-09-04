@@ -2,11 +2,11 @@ import type { UsageSummary } from "../lib/api";
 
 function Cell({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-      <div className="text-[10px] font-medium uppercase tracking-wide text-slate-400">
+    <div className="rounded-lg border border-line bg-surface px-3 py-2">
+      <div className="text-[10px] font-medium uppercase tracking-wide text-fg-subtle">
         {label}
       </div>
-      <div className="mt-1 text-lg font-semibold tabular-nums text-slate-800">{value}</div>
+      <div className="mt-1 text-lg font-semibold tabular-nums text-fg">{value}</div>
     </div>
   );
 }
@@ -24,7 +24,7 @@ export function MetricsRow({
         {Array.from({ length: 4 }).map((_, i) => (
           <div
             key={i}
-            className="h-[58px] animate-pulse rounded-lg border border-slate-200 bg-white"
+            className="h-[58px] animate-pulse rounded-lg border border-line bg-surface"
           />
         ))}
       </div>

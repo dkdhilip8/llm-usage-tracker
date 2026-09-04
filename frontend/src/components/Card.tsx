@@ -13,12 +13,12 @@ export function Card({
 }) {
   return (
     <div
-      className={`rounded-xl border border-slate-200 bg-white shadow-sm ${className}`}
+      className={`rounded-xl border border-line bg-surface shadow-sm ${className}`}
     >
       {(title || right) && (
-        <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
+        <div className="flex items-center justify-between border-b border-line px-4 py-3">
           {title && (
-            <h3 className="text-sm font-semibold text-slate-700">{title}</h3>
+            <h3 className="text-sm font-semibold text-fg">{title}</h3>
           )}
           {right}
         </div>

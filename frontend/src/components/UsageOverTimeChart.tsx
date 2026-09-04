@@ -11,6 +11,7 @@ import {
 import type { TimeseriesPoint } from "../lib/api";
 import { Card } from "./Card";
 import { usd } from "../lib/format";
+import { chartTheme, useTheme } from "../lib/theme";
 
 const COLORS: Record<string, string> = {
   openai: "#4f46e5",
@@ -22,6 +23,7 @@ type Metric = "cost" | "total_tokens";
 
 export function UsageOverTimeChart({ data }: { data: TimeseriesPoint[] }) {
   const [metric, setMetric] = useState<Metric>("cost");
+  const ct = chartTheme(useTheme().isDark);
 
   const { rows, providers } = useMemo(() => {
     const providerSet = new Set<string>();
@@ -42,7 +44,7 @@ export function UsageOverTimeChart({ data }: { data: TimeseriesPoint[] }) {
     <Card
       title="Usage over time"
       right={
-        <div className="flex overflow-hidden rounded-md border border-slate-300 text-xs">
+        <div className="flex overflow-hidden rounded-md border border-line text-xs">
           {(["cost", "total_tokens"] as Metric[]).map((m) => (
             <button
               key={m}
@@ -50,7 +52,7 @@ export function UsageOverTimeChart({ data }: { data: TimeseriesPoint[] }) {
               className={`px-2 py-1 ${
                 metric === m
                   ? "bg-brand-600 text-white"
-                  : "bg-white text-slate-600 hover:bg-slate-50"
+                  : "bg-surface text-fg-muted hover:bg-fill"
               }`}
             >
               {m === "cost" ? "Cost" : "Tokens"}
@@ -61,17 +63,17 @@ export function UsageOverTimeChart({ data }: { data: TimeseriesPoint[] }) {
     >
       <div className="h-72 w-full">
         {rows.length === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+          <div className="flex h-full items-center justify-center text-sm text-fg-subtle">
             No usage in this range yet
           </div>
         ) : (
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#eef2f7" />
-              <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke="#94a3b8" />
+              <CartesianGrid strokeDasharray="3 3" stroke={ct.grid} />
+              <XAxis dataKey="day" tick={{ fontSize: 11 }} stroke={ct.axis} />
               <YAxis
                 tick={{ fontSize: 11 }}
-                stroke="#94a3b8"
+                stroke={ct.axis}
                 tickFormatter={(v: number) =>
                   metric === "cost" ? usd(v) : String(v)
                 }
@@ -81,6 +83,9 @@ export function UsageOverTimeChart({ data }: { data: TimeseriesPoint[] }) {
                 formatter={(v: number) =>
                   metric === "cost" ? usd(v) : v.toLocaleString()
                 }
+                contentStyle={ct.tooltip.contentStyle}
+                labelStyle={ct.tooltip.labelStyle}
+                itemStyle={ct.tooltip.itemStyle}
               />
               {providers.map((p) => (
                 <Area

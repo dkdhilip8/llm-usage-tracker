@@ -3,6 +3,7 @@ import { Cell, Pie, PieChart, ResponsiveContainer, Tooltip } from "recharts";
 import type { ByModelRow } from "../lib/api";
 import { Card } from "./Card";
 import { tokens } from "../lib/format";
+import { chartTheme, useTheme } from "../lib/theme";
 
 const COLORS: Record<string, string> = {
   openai: "#4f46e5",
@@ -11,6 +12,7 @@ const COLORS: Record<string, string> = {
 };
 
 export function UsageByProviderChart({ data }: { data: ByModelRow[] }) {
+  const ct = chartTheme(useTheme().isDark);
   const slices = useMemo(() => {
     const byProvider = new Map<string, number>();
     for (const r of data) {
@@ -25,7 +27,7 @@ export function UsageByProviderChart({ data }: { data: ByModelRow[] }) {
     <Card title="Usage by provider">
       <div className="h-72 w-full">
         {total === 0 ? (
-          <div className="flex h-full items-center justify-center text-sm text-slate-400">
+          <div className="flex h-full items-center justify-center text-sm text-fg-subtle">
             No usage in this range yet
           </div>
         ) : (
@@ -44,7 +46,12 @@ export function UsageByProviderChart({ data }: { data: ByModelRow[] }) {
                   <Cell key={s.provider} fill={COLORS[s.provider] ?? "#64748b"} />
                 ))}
               </Pie>
-              <Tooltip formatter={(v: number) => `${tokens(v)} tokens`} />
+              <Tooltip
+                formatter={(v: number) => `${tokens(v)} tokens`}
+                contentStyle={ct.tooltip.contentStyle}
+                labelStyle={ct.tooltip.labelStyle}
+                itemStyle={ct.tooltip.itemStyle}
+              />
             </PieChart>
           </ResponsiveContainer>
         )}

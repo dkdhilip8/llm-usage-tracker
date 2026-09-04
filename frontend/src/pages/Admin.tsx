@@ -45,28 +45,28 @@ function ProviderPanel() {
         </button>
       }
     >
-      {err && <div className="text-sm text-red-600">{err}</div>}
+      {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
       <ul className="space-y-2 text-sm">
         {(rows ?? []).map((p) => {
           const [dot, text] = p.configured
             ? p.valid
               ? ["bg-emerald-500", "configured & valid"]
               : ["bg-amber-500", "configured, check failed"]
-            : ["bg-slate-300", "not configured"];
+            : ["bg-fill", "not configured"];
           return (
             <li key={p.provider} className="flex items-center gap-2">
               <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dot}`} />
               <span className="font-medium capitalize">{p.provider}</span>
-              <code className="rounded bg-slate-100 px-1 text-[11px] text-slate-500">
+              <code className="rounded bg-fill px-1 text-[11px] text-fg-muted">
                 {p.env_var}
               </code>
-              <span className="ml-auto text-xs text-slate-400">{text}</span>
+              <span className="ml-auto text-xs text-fg-subtle">{text}</span>
             </li>
           );
         })}
       </ul>
 
-      <details className="mt-3 text-[11px] text-slate-500">
+      <details className="mt-3 text-[11px] text-fg-muted">
         <summary className="cursor-pointer text-brand-600">How to configure</summary>
         <div className="mt-2 space-y-1">
           <p>
@@ -130,14 +130,14 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
     <Card title="Create a virtual key">
       <div className="space-y-3">
         <input
-          className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          className="w-full rounded-md border border-line px-3 py-2 text-sm"
           placeholder="Label — e.g. Jane (Data Science) or Support Bot"
           value={label}
           onChange={(e) => setLabel(e.target.value)}
         />
 
         <div>
-          <div className="mb-1 text-xs font-medium uppercase tracking-wide text-slate-500">
+          <div className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
             Allowed providers
           </div>
           <div className="flex flex-wrap gap-3">
@@ -155,10 +155,10 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
         </div>
 
         <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs font-medium text-slate-500">
+          <label className="text-xs font-medium text-fg-muted">
             Default provider
             <select
-              className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
               value={defaultProvider}
               onChange={(e) => setDefaultProvider(e.target.value)}
             >
@@ -170,28 +170,28 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
               ))}
             </select>
           </label>
-          <label className="text-xs font-medium text-slate-500">
+          <label className="text-xs font-medium text-fg-muted">
             Monthly budget (USD)
             <input
               type="number"
               step="0.01"
               min="0"
               placeholder="unlimited"
-              className="mt-1 w-full rounded-md border border-slate-300 px-2 py-1.5 text-sm"
+              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
               value={budget}
               onChange={(e) => setBudget(e.target.value)}
             />
           </label>
         </div>
 
-        <label className="flex items-center gap-2 text-sm text-slate-600">
+        <label className="flex items-center gap-2 text-sm text-fg-muted">
           <input
             type="checkbox"
             checked={allowLive}
             onChange={(e) => setAllowLive(e.target.checked)}
           />
           Allow live calls
-          <span className="text-xs text-slate-400">
+          <span className="text-xs text-fg-subtle">
             (still gated by <code>ENABLE_LIVE</code> + provider validity)
           </span>
         </label>
@@ -204,15 +204,15 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
           Create key
         </button>
 
-        {err && <div className="text-sm text-red-600">{err}</div>}
+        {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
 
         {created && (
-          <div className="rounded-md border border-emerald-200 bg-emerald-50 p-3">
-            <div className="text-xs font-medium text-emerald-800">
+          <div className="rounded-md border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 p-3">
+            <div className="text-xs font-medium text-emerald-800 dark:text-emerald-300">
               Copy this key now — it is shown only once.
             </div>
             <div className="mt-1 flex items-center gap-2">
-              <code className="flex-1 break-all rounded bg-white px-2 py-1 font-mono text-xs text-slate-700">
+              <code className="flex-1 break-all rounded bg-surface px-2 py-1 font-mono text-xs text-fg">
                 {created.key}
               </code>
               <button
@@ -225,7 +225,7 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
                 {copied ? "Copied" : "Copy"}
               </button>
             </div>
-            <div className="mt-1 text-xs text-emerald-700">
+            <div className="mt-1 text-xs text-emerald-700 dark:text-emerald-400">
               {created.label} · {created.allowed_providers.join(", ")}
               {created.allow_live ? " · live-allowed" : ""}
             </div>
@@ -258,13 +258,13 @@ export function Admin() {
     return (
       <div className="mx-auto max-w-md">
         <Card title="Admin access">
-          <p className="mb-3 text-sm text-slate-500">
+          <p className="mb-3 text-sm text-fg-muted">
             Enter the admin token to manage providers and virtual keys. Viewing the
             dashboard needs no token.
           </p>
           <input
             type="password"
-            className="w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+            className="w-full rounded-md border border-line px-3 py-2 text-sm"
             placeholder="ADMIN_TOKEN"
             value={token}
             onChange={(e) => setToken(e.target.value)}
@@ -288,21 +288,21 @@ export function Admin() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-800">Gateway admin</h1>
+        <h1 className="text-lg font-semibold text-fg">Gateway admin</h1>
         <button
           onClick={() => {
             setAdminToken("");
             setSavedToken("");
             setKeys([]);
           }}
-          className="text-sm text-slate-500 hover:underline"
+          className="text-sm text-fg-muted hover:underline"
         >
           Sign out of admin
         </button>
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-400">
           {error}
         </div>
       )}
@@ -316,7 +316,7 @@ export function Admin() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
+              <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-fg-subtle">
                 <th className="py-2 pr-4">Label</th>
                 <th className="py-2 pr-4">Prefix</th>
                 <th className="py-2 pr-4">Allowed providers</th>
@@ -331,7 +331,7 @@ export function Admin() {
             <tbody>
               {keys.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-slate-400">
+                  <td colSpan={9} className="py-8 text-center text-fg-subtle">
                     No keys yet — create one above.
                   </td>
                 </tr>
@@ -339,8 +339,8 @@ export function Admin() {
               {keys.map((k) => (
                 <tr
                   key={k.id}
-                  className={`border-b border-slate-50 last:border-0 ${
-                    k.revoked_at ? "text-slate-400" : ""
+                  className={`border-b border-line last:border-0 ${
+                    k.revoked_at ? "text-fg-subtle" : ""
                   }`}
                 >
                   <td className="py-2 pr-4 font-medium">{k.label}</td>
@@ -350,7 +350,7 @@ export function Admin() {
                       {k.allowed_providers.map((p) => (
                         <span
                           key={p}
-                          className="rounded bg-slate-100 px-1.5 py-0.5 text-[11px] text-slate-600"
+                          className="rounded bg-fill px-1.5 py-0.5 text-[11px] text-fg-muted"
                         >
                           {p}
                         </span>
@@ -359,7 +359,7 @@ export function Admin() {
                   </td>
                   <td className="py-2 pr-4 text-center">
                     {k.revoked_at ? (
-                      <span className="text-xs text-slate-300">—</span>
+                      <span className="text-xs text-fg-subtle">—</span>
                     ) : (
                       <button
                         onClick={() =>
@@ -371,8 +371,8 @@ export function Admin() {
                         title="Toggle live calls for this key"
                         className={`rounded px-2 py-0.5 text-[11px] font-bold ${
                           k.allow_live
-                            ? "bg-emerald-100 text-emerald-700"
-                            : "bg-slate-100 text-slate-400"
+                            ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                            : "bg-fill text-fg-subtle"
                         }`}
                       >
                         {k.allow_live ? "LIVE ✓" : "live ✗"}
@@ -385,14 +385,14 @@ export function Admin() {
                   </td>
                   <td className="py-2 pr-4">
                     {k.monthly_budget_usd == null ? (
-                      <span className="text-xs text-slate-300">unlimited</span>
+                      <span className="text-xs text-fg-subtle">unlimited</span>
                     ) : (
                       <div className="w-28">
-                        <div className="flex justify-between text-[10px] text-slate-400">
+                        <div className="flex justify-between text-[10px] text-fg-subtle">
                           <span>{usd(k.spend_month)}</span>
                           <span>{usd(k.monthly_budget_usd)}</span>
                         </div>
-                        <div className="mt-0.5 h-1.5 rounded bg-slate-100">
+                        <div className="mt-0.5 h-1.5 rounded bg-fill">
                           <div
                             className={`h-1.5 rounded ${
                               k.spend_month >= k.monthly_budget_usd
@@ -412,7 +412,7 @@ export function Admin() {
                       </div>
                     )}
                   </td>
-                  <td className="py-2 pr-4 text-xs text-slate-400">
+                  <td className="py-2 pr-4 text-xs text-fg-subtle">
                     {relTime(k.last_used_at)}
                   </td>
                   <td className="py-2 pr-0 text-right">
@@ -425,7 +425,7 @@ export function Admin() {
                             setError(e.message),
                           )
                         }
-                        className="rounded border border-red-200 px-2 py-1 text-xs text-red-600 hover:bg-red-50"
+                        className="rounded border border-red-200 dark:border-red-500/30 px-2 py-1 text-xs text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10"
                       >
                         Revoke
                       </button>

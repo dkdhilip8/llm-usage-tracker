@@ -2,6 +2,28 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  color-scheme: light;
+  --surface: 255 255 255; /* cards / panels */
+  --surface-2: 248 250 252; /* page background */
+  --fill: 241 245 249; /* chips, hover fills (slate-100) */
+  --fg: 30 41 59; /* primary text (slate-800) */
+  --fg-muted: 100 116 139; /* secondary text (slate-500) */
+  --fg-subtle: 148 163 184; /* tertiary text (slate-400) */
+  --line: 226 232 240; /* borders (slate-200) */
+}
+
+:root.dark {
+  color-scheme: dark;
+  --surface: 15 23 42; /* slate-900 */
+  --surface-2: 2 6 23; /* slate-950 */
+  --fill: 30 41 59; /* slate-800 — sits above the card */
+  --fg: 226 232 240; /* slate-200 */
+  --fg-muted: 148 163 184; /* slate-400 */
+  --fg-subtle: 100 116 139; /* slate-500 */
+  --line: 30 41 59; /* slate-800 */
+}
+
 html,
 body,
 #root {
@@ -9,5 +31,22 @@ body,
 }
 
 body {
-  @apply bg-slate-50 text-slate-800 antialiased;
+  @apply bg-surface-2 text-fg antialiased;
+}
+
+@layer base {
+  input:where(:not([type="checkbox"]):not([type="radio"])),
+  textarea,
+  select {
+    @apply bg-surface-2 text-fg;
+    border-color: rgb(var(--line));
+  }
+  ::placeholder {
+    color: rgb(var(--fg-subtle));
+    opacity: 1;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: #6366f1; /* brand-500 */
+  }
 }

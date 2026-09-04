@@ -34,7 +34,7 @@ export function Requests() {
     return (
       <div className="mx-auto max-w-md">
         <Card title="Requests">
-          <p className="text-sm text-slate-500">
+          <p className="text-sm text-fg-muted">
             Enter the admin token on the <strong>Admin</strong> page to view the request log.
           </p>
         </Card>
@@ -45,22 +45,22 @@ export function Requests() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-800">Request log</h1>
+        <h1 className="text-lg font-semibold text-fg">Request log</h1>
         <button
           onClick={() => load(null)}
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+          className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-fg-muted hover:bg-fill"
         >
           Refresh
         </button>
       </div>
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-400">
           {error}
         </div>
       )}
       {!bodiesLogged && (
-        <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-500">
+        <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-fg-muted">
           Prompt / response bodies are not stored (set <code>LOG_BODIES=true</code> to capture
           truncated previews).
         </div>
@@ -70,7 +70,7 @@ export function Requests() {
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
-              <tr className="border-b border-slate-100 text-left text-xs uppercase tracking-wide text-slate-400">
+              <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-fg-subtle">
                 <th className="py-2 pr-3">When</th>
                 <th className="py-2 pr-3">Key</th>
                 <th className="py-2 pr-3">Model</th>
@@ -84,7 +84,7 @@ export function Requests() {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-slate-400">
+                  <td colSpan={8} className="py-8 text-center text-fg-subtle">
                     No requests yet.
                   </td>
                 </tr>
@@ -93,9 +93,9 @@ export function Requests() {
                 <tr
                   key={r.id}
                   onClick={() => setOpen(r)}
-                  className="cursor-pointer border-b border-slate-50 last:border-0 hover:bg-slate-50"
+                  className="cursor-pointer border-b border-line last:border-0 hover:bg-fill"
                 >
-                  <td className="py-2 pr-3 text-xs text-slate-400">{relTime(r.ts)}</td>
+                  <td className="py-2 pr-3 text-xs text-fg-subtle">{relTime(r.ts)}</td>
                   <td className="py-2 pr-3">{r.key_label}</td>
                   <td className="py-2 pr-3 font-mono text-xs">
                     {r.provider}/{r.model}
@@ -104,8 +104,8 @@ export function Requests() {
                     <span
                       className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
                         r.mode === "live"
-                          ? "bg-emerald-100 text-emerald-700"
-                          : "bg-amber-100 text-amber-700"
+                          ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
+                          : "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400"
                       }`}
                     >
                       {r.mode}
@@ -114,7 +114,7 @@ export function Requests() {
                   <td className="py-2 pr-3 text-right tabular-nums">{r.total_tokens}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">
                     {usd(r.cost)}
-                    <span className="ml-1 text-[10px] text-slate-400">
+                    <span className="ml-1 text-[10px] text-fg-subtle">
                       {r.cost_source === "provider" ? "actual" : "est"}
                     </span>
                   </td>
@@ -122,7 +122,7 @@ export function Requests() {
                   <td className="py-2 pr-0 text-center">
                     <span
                       className={
-                        r.status === "error" ? "text-red-600" : "text-slate-400"
+                        r.status === "error" ? "text-red-600 dark:text-red-400" : "text-fg-subtle"
                       }
                     >
                       {r.status}
@@ -136,7 +136,7 @@ export function Requests() {
         {more && (
           <button
             onClick={() => load(cursor)}
-            className="mt-3 w-full rounded-md border border-slate-200 py-1.5 text-sm text-brand-600 hover:bg-slate-50"
+            className="mt-3 w-full rounded-md border border-line py-1.5 text-sm text-brand-600 hover:bg-fill"
           >
             Load more
           </button>
@@ -149,14 +149,14 @@ export function Requests() {
           onClick={() => setOpen(null)}
         >
           <div
-            className="h-full w-full max-w-lg overflow-y-auto bg-white p-5 shadow-xl"
+            className="h-full w-full max-w-lg overflow-y-auto bg-surface p-5 shadow-xl"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="font-semibold text-slate-800">Request detail</h2>
+              <h2 className="font-semibold text-fg">Request detail</h2>
               <button
                 onClick={() => setOpen(null)}
-                className="text-slate-400 hover:text-slate-600"
+                className="text-fg-subtle hover:text-fg"
               >
                 ✕
               </button>
@@ -180,21 +180,21 @@ export function Requests() {
                 ["Status", open.status],
               ].map(([k, v]) => (
                 <div key={k} className="flex gap-2">
-                  <dt className="w-32 shrink-0 text-slate-400">{k}</dt>
-                  <dd className="font-mono text-xs text-slate-700">{v}</dd>
+                  <dt className="w-32 shrink-0 text-fg-subtle">{k}</dt>
+                  <dd className="font-mono text-xs text-fg">{v}</dd>
                 </div>
               ))}
             </dl>
             <div className="mt-4 space-y-3">
               <div>
-                <div className="text-xs font-medium text-slate-400">Prompt</div>
-                <pre className="mt-1 whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">
+                <div className="text-xs font-medium text-fg-subtle">Prompt</div>
+                <pre className="mt-1 whitespace-pre-wrap rounded bg-surface-2 p-2 text-xs text-fg">
                   {open.prompt_preview ?? "— not stored —"}
                 </pre>
               </div>
               <div>
-                <div className="text-xs font-medium text-slate-400">Response</div>
-                <pre className="mt-1 whitespace-pre-wrap rounded bg-slate-50 p-2 text-xs text-slate-700">
+                <div className="text-xs font-medium text-fg-subtle">Response</div>
+                <pre className="mt-1 whitespace-pre-wrap rounded bg-surface-2 p-2 text-xs text-fg">
                   {open.response_preview ?? "— not stored —"}
                 </pre>
               </div>

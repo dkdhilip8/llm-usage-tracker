@@ -63,10 +63,10 @@ export function Dashboard() {
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-slate-800">Organization LLM usage</h1>
+        <h1 className="text-lg font-semibold text-fg">Organization LLM usage</h1>
         <button
           onClick={load}
-          className="rounded-md border border-slate-300 bg-white px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50"
+          className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-fg-muted hover:bg-fill"
         >
           Refresh
         </button>
@@ -75,7 +75,7 @@ export function Dashboard() {
       <FilterBar filters={filters} onChange={setFilters} models={models} keys={allKeys} />
 
       {error && (
-        <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <div className="rounded-md border border-red-200 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2 text-sm text-red-700 dark:text-red-400">
           {error}
         </div>
       )}
