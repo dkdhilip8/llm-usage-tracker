@@ -1,0 +1,218 @@
+"""Provider credentials, liveness checks (cached), and real upstream calls.
+
+Credentials come from server env vars only — never the DB, never the UI, never
+per-user. Live calls are dormant unless ENABLE_LIVE is set AND the calling virtual
+key has allow_live AND the provider is configured & reachable."""
+
+import json
+import time
+from collections.abc import Iterator
+
+import httpx
+
+from app.config import settings
+
+SUPPORTED = ("openai", "anthropic", "openrouter")
+
+ENV_VARS = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openrouter": "OPENROUTER_API_KEY",
+}
+
+_LIVENESS_URLS = {
+    "openai": "https://api.openai.com/v1/models",
+    "anthropic": "https://api.anthropic.com/v1/models",
+    "openrouter": "https://openrouter.ai/api/v1/key",
+}
+
+_CHAT_URLS = {
+    "openai": "https://api.openai.com/v1/chat/completions",
+    "anthropic": "https://api.anthropic.com/v1/messages",
+    "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+}
+
+# provider -> (valid: bool, checked_at: epoch seconds)
+_cache: dict[str, tuple[bool, float]] = {}
+
+
+def is_configured(provider: str) -> bool:
+    return bool(settings.provider_api_key(provider))
+
+
+def _auth_headers(provider: str) -> dict[str, str]:
+    key = settings.provider_api_key(provider)
+    if provider == "anthropic":
+        return {"x-api-key": key, "anthropic-version": "2023-06-01"}
+    return {"Authorization": f"Bearer {key}"}
+
+
+def check_liveness(provider: str, *, force: bool = False) -> bool:
+    """Cheap GET against the provider to confirm the key works. Cached for
+    PROVIDER_CHECK_TTL seconds."""
+    if not is_configured(provider):
+        return False
+    now = time.time()
+    cached = _cache.get(provider)
+    if cached and not force and now - cached[1] < settings.PROVIDER_CHECK_TTL:
+        return cached[0]
+    valid = False
+    try:
+        resp = httpx.get(
+            _LIVENESS_URLS[provider], headers=_auth_headers(provider), timeout=8.0
+        )
+        valid = resp.status_code == 200
+    except Exception:
+        valid = False
+    _cache[provider] = (valid, now)
+    return valid
+
+
+def status(*, force: bool = False) -> list[dict]:
+    out = []
+    for provider in SUPPORTED:
+        configured = is_configured(provider)
+        valid = check_liveness(provider, force=force) if configured else False
+        checked = _cache.get(provider)
+        out.append(
+            {
+                "provider": provider,
+                "env_var": ENV_VARS[provider],
+                "configured": configured,
+                "valid": valid,
+                "checked_at": (
+                    time.strftime(
+                        "%Y-%m-%dT%H:%M:%SZ", time.gmtime(checked[1])
+                    )
+                    if checked
+                    else None
+                ),
+            }
+        )
+    return out
+
+
+def warm_cache() -> None:
+    """Best-effort liveness check on startup for any configured provider."""
+    for provider in SUPPORTED:
+        if is_configured(provider):
+            try:
+                check_liveness(provider, force=True)
+            except Exception:
+                pass
+
+
+def live_available(provider: str) -> bool:
+    return settings.ENABLE_LIVE and is_configured(provider) and check_liveness(provider)
+
+
+# ---- real upstream calls (only reached when live_available and key.allow_live) ----
+def call_provider(
+    provider: str, model: str, prompt: str
+) -> tuple[str, int, int, float | None]:
+    """Returns (text, prompt_tokens, completion_tokens, actual_cost_usd).
+
+    actual_cost is the real amount the provider charged when it reports one
+    (OpenRouter does, via `usage.cost`); it is None for OpenAI/Anthropic, whose
+    APIs return token counts only — the caller then estimates from the price table.
+    Raises on transport/HTTP failure."""
+    headers = _auth_headers(provider)
+
+    if provider == "anthropic":
+        r = httpx.post(
+            _CHAT_URLS[provider],
+            headers=headers,
+            json={
+                "model": model,
+                "max_tokens": 1024,
+                "messages": [{"role": "user", "content": prompt}],
+            },
+            timeout=60.0,
+        )
+        r.raise_for_status()
+        data = r.json()
+        text = "".join(block.get("text", "") for block in data.get("content", []))
+        usage = data.get("usage", {})
+        return (
+            text,
+            int(usage.get("input_tokens", 0)),
+            int(usage.get("output_tokens", 0)),
+            None,  # Anthropic returns no per-request cost
+        )
+
+    # openai + openrouter share the OpenAI chat-completions shape
+    body: dict = {"model": model, "messages": [{"role": "user", "content": prompt}]}
+    if provider == "openrouter":
+        headers = {
+            **headers,
+            "HTTP-Referer": "https://llm-usage-tracker.demo",
+            "X-Title": "LLM Usage Tracker",
+        }
+        body["usage"] = {"include": True}  # ask OpenRouter to return the real cost
+
+    r = httpx.post(_CHAT_URLS[provider], headers=headers, json=body, timeout=60.0)
+    r.raise_for_status()
+    data = r.json()
+    text = data["choices"][0]["message"]["content"]
+    usage = data.get("usage", {})
+    actual_cost = usage.get("cost")  # present for OpenRouter, absent for OpenAI
+    return (
+        text,
+        int(usage.get("prompt_tokens", 0)),
+        int(usage.get("completion_tokens", 0)),
+        float(actual_cost) if actual_cost is not None else None,
+    )
+
+
+def stream_openai_compatible(
+    provider: str, model: str, prompt: str
+) -> Iterator[tuple[str, object]]:
+    """True SSE passthrough for OpenAI-shaped providers (openai, openrouter).
+
+    Yields ("delta", text) for each content delta, then a final
+    ("done", {"prompt_tokens", "completion_tokens", "cost"}). Raises on transport
+    or HTTP error (caller falls back to simulated)."""
+    headers = _auth_headers(provider)
+    body: dict = {
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "stream": True,
+    }
+    if provider == "openrouter":
+        headers = {
+            **headers,
+            "HTTP-Referer": "https://llm-usage-tracker.demo",
+            "X-Title": "LLM Usage Tracker",
+        }
+        body["usage"] = {"include": True}
+    else:  # openai
+        body["stream_options"] = {"include_usage": True}
+
+    pt = ct = 0
+    cost: float | None = None
+    with httpx.Client(timeout=60.0) as client:
+        with client.stream(
+            "POST", _CHAT_URLS[provider], headers=headers, json=body
+        ) as r:
+            r.raise_for_status()
+            for line in r.iter_lines():
+                if not line or not line.startswith("data:"):
+                    continue
+                payload = line[5:].strip()
+                if payload == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(payload)
+                except json.JSONDecodeError:
+                    continue
+                for choice in chunk.get("choices", []) or []:
+                    delta = (choice.get("delta") or {}).get("content")
+                    if delta:
+                        yield ("delta", delta)
+                u = chunk.get("usage")
+                if u:
+                    pt = int(u.get("prompt_tokens", pt) or pt)
+                    ct = int(u.get("completion_tokens", ct) or ct)
+                    if u.get("cost") is not None:
+                        cost = float(u["cost"])
+    yield ("done", {"prompt_tokens": pt, "completion_tokens": ct, "cost": cost})

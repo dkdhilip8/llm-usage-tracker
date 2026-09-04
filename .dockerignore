@@ -1,0 +1,11 @@
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/dist/
+**/.venv/
+**/venv/
+**/.vite/
+.git/
+.env
+*.md
+!README.md

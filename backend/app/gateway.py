@@ -1,0 +1,198 @@
+"""Shared request lifecycle for the proxy endpoints.
+
+`routers/proxy.py` (friendly shape, used by the Playground) and
+`routers/openai_compat.py` (OpenAI `/v1/chat/completions` shape) both build on these:
+target resolution + provider ACL, monthly-budget enforcement, the simulate-vs-live
+decision, and the usage-log write."""
+
+import time
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from uuid import uuid4
+
+from fastapi import HTTPException
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
+
+from app import providers
+from app.config import settings
+from app.db import SessionLocal
+from app.models import UsageLog, VirtualKey
+from app.pricing import PROVIDERS, estimate_cost, price_for
+from app.simulator import simulate_chat
+
+
+@dataclass
+class CompletionResult:
+    text: str
+    prompt_tokens: int
+    completion_tokens: int
+    cost: float
+    cost_source: str  # "provider" | "configured"
+    mode: str  # "live" | "simulated"
+    latency_ms: int
+
+    @property
+    def total_tokens(self) -> int:
+        return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def simulated(self) -> bool:
+        return self.mode == "simulated"
+
+    def pricing_block(self, provider: str, model: str) -> dict:
+        p = price_for(provider, model)
+        return {
+            "input_per_1m": p["input"],
+            "output_per_1m": p["output"],
+            "source": provider if self.cost_source == "provider" else "configured",
+        }
+
+
+def authorize_provider(vk: VirtualKey, provider: str) -> None:
+    if provider not in PROVIDERS:
+        raise HTTPException(422, f"provider must be one of {PROVIDERS}")
+    if provider not in vk.provider_names():
+        raise HTTPException(
+            403, f"this key is not permitted to use provider '{provider}'"
+        )
+
+
+def resolve_target(vk: VirtualKey, model_str: str) -> tuple[str, str]:
+    """Split an OpenAI-style `model` into (provider, model). `openrouter/x/y` ->
+    ('openrouter', 'x/y'); a bare name falls back to the key's default_provider."""
+    model_str = (model_str or "").strip()
+    if "/" in model_str:
+        provider, model = model_str.split("/", 1)
+    else:
+        provider, model = (vk.default_provider or ""), model_str
+    provider = provider.lower()
+    if not model:
+        raise HTTPException(422, "model is required")
+    if not provider:
+        raise HTTPException(
+            422,
+            "model must be '<provider>/<model>' (e.g. 'openrouter/meta-llama/"
+            "llama-3.3-70b-instruct') or the key needs a default_provider",
+        )
+    authorize_provider(vk, provider)
+    return provider, model
+
+
+def month_spend(db: Session, key_id: int) -> float:
+    val = db.scalar(
+        select(func.coalesce(func.sum(UsageLog.cost), 0)).where(
+            UsageLog.key_id == key_id,
+            UsageLog.ts >= func.date_trunc("month", func.now()),
+        )
+    )
+    return float(val or 0)
+
+
+def enforce_budget(db: Session, vk: VirtualKey) -> None:
+    if vk.monthly_budget_usd is None:
+        return
+    spent = month_spend(db, vk.id)
+    if spent >= float(vk.monthly_budget_usd):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": (
+                    f"monthly budget of ${float(vk.monthly_budget_usd):.6f} exhausted "
+                    f"(spent ${spent:.6f})"
+                ),
+                "type": "budget_exceeded",
+                "code": "402",
+            },
+        )
+
+
+def run_completion(
+    vk: VirtualKey, provider: str, model: str, prompt: str
+) -> CompletionResult:
+    go_live = (
+        settings.ENABLE_LIVE and vk.allow_live and providers.live_available(provider)
+    )
+    actual_cost: float | None = None
+    if go_live:
+        try:
+            t0 = time.perf_counter()
+            text, pt, ct, actual_cost = providers.call_provider(provider, model, prompt)
+            latency_ms = int((time.perf_counter() - t0) * 1000)
+            mode = "live"
+        except Exception as exc:  # fall back to simulated rather than 5xx the demo
+            text, pt, ct, latency_ms = simulate_chat(provider, model, prompt)
+            text = f"[live call failed, simulated instead: {exc}] {text}"
+            mode, actual_cost = "simulated", None
+    else:
+        text, pt, ct, latency_ms = simulate_chat(provider, model, prompt)
+        mode = "simulated"
+
+    if actual_cost is not None:
+        cost, cost_source = round(actual_cost, 6), "provider"
+    else:
+        cost, cost_source = estimate_cost(provider, model, pt, ct), "configured"
+
+    return CompletionResult(text, pt, ct, cost, cost_source, mode, latency_ms)
+
+
+def _preview(text: str, limit: int = 500) -> str:
+    text = (text or "").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
+def record_usage(
+    db: Session,
+    vk: VirtualKey,
+    provider: str,
+    model: str,
+    prompt: str,
+    result: CompletionResult,
+    *,
+    request_id: str | None = None,
+    status: str = "success",
+) -> UsageLog:
+    row = UsageLog(
+        key_id=vk.id,
+        request_id=request_id or str(uuid4()),
+        provider=provider,
+        model=model,
+        prompt_tokens=result.prompt_tokens,
+        completion_tokens=result.completion_tokens,
+        total_tokens=result.total_tokens,
+        cost=result.cost,
+        cost_source=result.cost_source,
+        simulated=result.simulated,
+        mode=result.mode,
+        latency_ms=result.latency_ms,
+        status=status,
+        prompt_preview=_preview(prompt) if settings.LOG_BODIES else None,
+        response_preview=_preview(result.text) if settings.LOG_BODIES else None,
+    )
+    db.add(row)
+    vk.last_used_at = datetime.now(UTC)
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def record_usage_detached(
+    vk_id: int,
+    provider: str,
+    model: str,
+    prompt: str,
+    result: CompletionResult,
+    *,
+    request_id: str | None = None,
+    status: str = "success",
+) -> None:
+    """Same as record_usage but opens its own session — for the streaming path,
+    which finishes writing after the request's session has been torn down."""
+    with SessionLocal() as db:
+        vk = db.get(VirtualKey, vk_id)
+        if vk is None:
+            return
+        record_usage(
+            db, vk, provider, model, prompt, result,
+            request_id=request_id, status=status,
+        )
