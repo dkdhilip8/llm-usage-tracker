@@ -52,7 +52,12 @@ export function UsageByModelChart({ data }: { data: ByModelRow[] }) {
                 labelStyle={ct.tooltip.labelStyle}
                 itemStyle={ct.tooltip.itemStyle}
               />
-              <Bar dataKey="tokens" fill="#4f46e5" radius={[0, 4, 4, 0]} />
+              <Bar
+                dataKey="tokens"
+                fill="#4f46e5"
+                radius={[0, 4, 4, 0]}
+                isAnimationActive={false}
+              />
             </BarChart>
           </ResponsiveContainer>
         )}

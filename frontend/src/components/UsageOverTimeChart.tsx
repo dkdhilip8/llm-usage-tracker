@@ -96,6 +96,7 @@ export function UsageOverTimeChart({ data }: { data: TimeseriesPoint[] }) {
                   stroke={COLORS[p] ?? "#64748b"}
                   fill={COLORS[p] ?? "#64748b"}
                   fillOpacity={0.2}
+                  isAnimationActive={false}
                 />
               ))}
             </AreaChart>

@@ -163,22 +163,23 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
           </div>
         </div>
 
+        <label className="block text-xs font-medium text-fg-muted">
+          Default provider
+          <select
+            className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+            value={defaultProvider}
+            onChange={(e) => setDefaultProvider(e.target.value)}
+          >
+            <option value="">none (require provider/ prefix)</option>
+            {allowed.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs font-medium text-fg-muted">
-            Default provider
-            <select
-              className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-              value={defaultProvider}
-              onChange={(e) => setDefaultProvider(e.target.value)}
-            >
-              <option value="">none (require provider/ prefix)</option>
-              {allowed.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
           <label className="text-xs font-medium text-fg-muted">
             Budget (USD)
             <input
@@ -191,9 +192,6 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
               onChange={(e) => setBudget(e.target.value)}
             />
           </label>
-        </div>
-
-        <div className="grid grid-cols-2 gap-2">
           <label className="text-xs font-medium text-fg-muted">
             Budget period
             <select

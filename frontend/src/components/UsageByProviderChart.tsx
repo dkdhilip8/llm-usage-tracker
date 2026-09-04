@@ -41,6 +41,7 @@ export function UsageByProviderChart({ data }: { data: ByModelRow[] }) {
                 outerRadius={90}
                 paddingAngle={2}
                 label={(d: { provider: string }) => d.provider}
+                isAnimationActive={false}
               >
                 {slices.map((s) => (
                   <Cell key={s.provider} fill={COLORS[s.provider] ?? "#64748b"} />
