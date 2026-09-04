@@ -5,11 +5,9 @@
 target resolution + provider ACL, monthly-budget enforcement, the simulate-vs-live
 decision, and the usage-log write."""
 
-import threading
 import time
-from collections import defaultdict, deque
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from fastapi import HTTPException
@@ -81,22 +79,45 @@ def resolve_target(vk: VirtualKey, model_str: str) -> tuple[str, str]:
     return provider, model
 
 
-_BUDGET_PERIODS = ("day", "week", "month")
+_ROLLING_PERIODS = ("day", "week", "month")
+
+
+def _budget_window(vk: VirtualKey):
+    """Returns the SQL condition selecting spend inside the key's active budget
+    window, or None when there is no active window (custom range with no dates,
+    or a custom range that hasn't started / has ended)."""
+    if vk.budget_period == "custom":
+        if not (vk.budget_start and vk.budget_end):
+            return None
+        now = datetime.now(UTC)
+        if now < vk.budget_start or now >= vk.budget_end:
+            return None
+        return (UsageLog.ts >= vk.budget_start) & (UsageLog.ts < vk.budget_end)
+    period = vk.budget_period if vk.budget_period in _ROLLING_PERIODS else "month"
+    return UsageLog.ts >= func.date_trunc(period, func.now())
 
 
 def period_spend(db: Session, vk: VirtualKey) -> float:
-    period = vk.budget_period if vk.budget_period in _BUDGET_PERIODS else "month"
+    cond = _budget_window(vk)
+    if cond is None:
+        return 0.0
     val = db.scalar(
         select(func.coalesce(func.sum(UsageLog.cost), 0)).where(
-            UsageLog.key_id == vk.id,
-            UsageLog.ts >= func.date_trunc(period, func.now()),
+            UsageLog.key_id == vk.id, cond
         )
     )
     return float(val or 0)
 
 
+def _budget_label(vk: VirtualKey) -> str:
+    if vk.budget_period == "custom" and vk.budget_start and vk.budget_end:
+        last = (vk.budget_end - timedelta(days=1)).date()
+        return f"for {vk.budget_start.date()}–{last}"
+    return f"per {vk.budget_period}"
+
+
 def enforce_budget(db: Session, vk: VirtualKey) -> None:
-    if vk.monthly_budget_usd is None:
+    if vk.monthly_budget_usd is None or _budget_window(vk) is None:
         return
     spent = period_spend(db, vk)
     if spent >= float(vk.monthly_budget_usd):
@@ -104,41 +125,13 @@ def enforce_budget(db: Session, vk: VirtualKey) -> None:
             status_code=402,
             detail={
                 "message": (
-                    f"budget of ${float(vk.monthly_budget_usd):.6f} per {vk.budget_period} "
+                    f"budget of ${float(vk.monthly_budget_usd):.6f} {_budget_label(vk)} "
                     f"exhausted (spent ${spent:.6f})"
                 ),
                 "type": "budget_exceeded",
                 "code": "402",
             },
         )
-
-
-# In-process per-key sliding window. Single-instance only; a multi-instance deploy
-# would move this to Redis (documented in the README backlog).
-_rl_lock = threading.Lock()
-_rl_hits: dict[int, deque[float]] = defaultdict(deque)
-
-
-def enforce_rate_limit(vk: VirtualKey) -> None:
-    if not vk.rpm_limit:
-        return
-    now = time.monotonic()
-    with _rl_lock:
-        hits = _rl_hits[vk.id]
-        while hits and hits[0] <= now - 60:
-            hits.popleft()
-        if len(hits) >= vk.rpm_limit:
-            retry = max(1, int(60 - (now - hits[0])) + 1)
-            raise HTTPException(
-                status_code=429,
-                detail={
-                    "message": f"rate limit of {vk.rpm_limit} requests/min exceeded",
-                    "type": "rate_limit_exceeded",
-                    "code": "429",
-                },
-                headers={"Retry-After": str(retry)},
-            )
-        hits.append(now)
 
 
 def run_completion(

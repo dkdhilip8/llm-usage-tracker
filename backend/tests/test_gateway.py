@@ -167,16 +167,6 @@ def _chat(client, key: str, model: str = OR_MODEL):
     )
 
 
-def test_rate_limit_429(client, make_key):
-    k = make_key(allowed_providers=["openrouter"], rpm_limit=2)
-    assert _chat(client, k["key"]).status_code == 200
-    assert _chat(client, k["key"]).status_code == 200
-    r = _chat(client, k["key"])
-    assert r.status_code == 429
-    assert r.json()["detail"]["type"] == "rate_limit_exceeded"
-    assert "retry-after" in {h.lower() for h in r.headers}
-
-
 def test_budget_period_stored_and_used(client, admin, make_key):
     k = make_key(
         allowed_providers=["openrouter"], monthly_budget_usd=0, budget_period="day"
@@ -186,6 +176,49 @@ def test_budget_period_stored_and_used(client, admin, make_key):
     assert "per day" in r.json()["detail"]["message"]
     rows = client.get("/api/keys", headers=admin).json()
     assert rows[0]["budget_period"] == "day"
+
+
+def test_custom_budget_window(client, admin, make_key):
+    import datetime as _dt
+
+    today = _dt.date.today()
+    # window that is active now -> 0 budget blocks
+    k = make_key(
+        allowed_providers=["openrouter"],
+        monthly_budget_usd=0,
+        budget_period="custom",
+        budget_start=str(today - _dt.timedelta(days=1)),
+        budget_end=str(today + _dt.timedelta(days=1)),
+    )
+    r = _chat(client, k["key"])
+    assert r.status_code == 402
+    assert "for " in r.json()["detail"]["message"]
+    rows = client.get("/api/keys", headers=admin).json()
+    assert rows[0]["budget_period"] == "custom"
+    assert rows[0]["budget_start"] and rows[0]["budget_end"]
+
+    # window entirely in the past -> cap no longer applies
+    k2 = make_key(
+        allowed_providers=["openrouter"],
+        monthly_budget_usd=0,
+        budget_period="custom",
+        budget_start=str(today - _dt.timedelta(days=10)),
+        budget_end=str(today - _dt.timedelta(days=5)),
+    )
+    assert _chat(client, k2["key"]).status_code == 200
+
+
+def test_custom_budget_requires_dates(client, admin):
+    r = client.post(
+        "/api/keys",
+        json={
+            "label": "bad",
+            "allowed_providers": ["openrouter"],
+            "budget_period": "custom",
+        },
+        headers=admin,
+    )
+    assert r.status_code == 422
 
 
 def test_expired_key_401(client, make_key):

@@ -56,7 +56,7 @@ export interface ProviderStatus {
   checked_at: string | null;
 }
 
-export type BudgetPeriod = "day" | "week" | "month";
+export type BudgetPeriod = "day" | "week" | "month" | "custom";
 
 export interface KeyRow {
   id: number;
@@ -67,7 +67,8 @@ export interface KeyRow {
   default_provider: string | null;
   monthly_budget_usd: number | null;
   budget_period: BudgetPeriod;
-  rpm_limit: number | null;
+  budget_start: string | null;
+  budget_end: string | null;
   expires_at: string | null;
   spend_period: number;
   created_at: string;
@@ -88,7 +89,8 @@ export interface KeyCreated {
   default_provider: string | null;
   monthly_budget_usd: number | null;
   budget_period: BudgetPeriod;
-  rpm_limit: number | null;
+  budget_start: string | null;
+  budget_end: string | null;
   expires_at: string | null;
   created_at: string;
 }
@@ -265,7 +267,8 @@ export const api = {
     default_provider?: string | null;
     monthly_budget_usd?: number | null;
     budget_period?: BudgetPeriod;
-    rpm_limit?: number | null;
+    budget_start?: string | null;
+    budget_end?: string | null;
     expires_in_days?: number | null;
   }) =>
     req<KeyCreated>("/api/keys", {
@@ -280,10 +283,10 @@ export const api = {
       default_provider?: string | null;
       monthly_budget_usd?: number | null;
       budget_period?: BudgetPeriod;
-      rpm_limit?: number | null;
+      budget_start?: string | null;
+      budget_end?: string | null;
       expires_in_days?: number | null;
       clear_budget?: boolean;
-      clear_rpm_limit?: boolean;
       clear_expiry?: boolean;
     },
   ) =>

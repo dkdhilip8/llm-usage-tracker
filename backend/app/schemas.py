@@ -1,9 +1,9 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-BudgetPeriod = Literal["day", "week", "month"]
+BudgetPeriod = Literal["day", "week", "month", "custom"]
 
 
 # ---- keys ----
@@ -14,7 +14,8 @@ class KeyCreate(BaseModel):
     default_provider: str | None = None
     monthly_budget_usd: float | None = Field(default=None, ge=0)
     budget_period: BudgetPeriod = "month"
-    rpm_limit: int | None = Field(default=None, ge=1)
+    budget_start: date | None = None  # required when budget_period == "custom"
+    budget_end: date | None = None  # inclusive end date
     expires_in_days: int | None = Field(default=None, ge=1)
 
 
@@ -23,10 +24,10 @@ class KeyUpdate(BaseModel):
     default_provider: str | None = None
     monthly_budget_usd: float | None = Field(default=None, ge=0)
     budget_period: BudgetPeriod | None = None
-    rpm_limit: int | None = Field(default=None, ge=1)
+    budget_start: date | None = None
+    budget_end: date | None = None
     expires_in_days: int | None = Field(default=None, ge=1)
     clear_budget: bool = False
-    clear_rpm_limit: bool = False
     clear_expiry: bool = False
 
 
@@ -40,7 +41,8 @@ class KeyCreated(BaseModel):
     default_provider: str | None
     monthly_budget_usd: float | None
     budget_period: str
-    rpm_limit: int | None
+    budget_start: datetime | None
+    budget_end: datetime | None
     expires_at: datetime | None
     created_at: datetime
 
@@ -54,7 +56,8 @@ class KeyOut(BaseModel):
     default_provider: str | None
     monthly_budget_usd: float | None
     budget_period: str
-    rpm_limit: int | None
+    budget_start: datetime | None
+    budget_end: datetime | None
     expires_at: datetime | None
     spend_period: float
     created_at: datetime

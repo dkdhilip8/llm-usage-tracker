@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # Simulator sleeps to mimic real latency. Tests set this false for speed.
     SIMULATE_LATENCY_SLEEP: bool = True
 
-    VERSION: str = "0.5.0"
+    VERSION: str = "0.6.0"
 
     @property
     def sqlalchemy_url(self) -> str:
