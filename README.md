@@ -50,7 +50,9 @@ Browser → React (Dashboard · Requests · Insights — public)  +  (Playground
 - **Backend:** FastAPI + SQLAlchemy 2.0 (sync) + psycopg3
 - **DB:** PostgreSQL 16
 - **Deploy:** one Docker image (FastAPI serves the built SPA) + one managed Postgres
-- **CI:** GitHub Actions — ruff + pytest (Postgres service), tsc + vitest + build, `docker build`
+- **CI config:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) defines ruff + pytest
+  (Postgres service), tsc + vitest + build, and `docker build`. Not yet enabled on the remote —
+  push it once the repo has GitHub Actions access.
 
 ---
 
@@ -102,7 +104,9 @@ ruff check app tests
 cd ../frontend && npm ci && npm run typecheck && npm test
 ```
 
-CI (`.github/workflows/ci.yml`) runs all of the above plus `docker build` on every push.
+`.github/workflows/ci.yml` runs all of the above plus `docker build`. It is committed but
+**not yet active on the remote** — enable GitHub Actions on the repo and push the workflow
+(`gh auth refresh -h github.com -s workflow`) to turn it on.
 
 ### Smoke test
 
@@ -157,7 +161,9 @@ The only "cost" of the free tier is a ~30–60 s cold start after 15 min idle (R
 1. Create a **Neon** project (free) → copy the pooled connection string.
 2. Push this repo to GitHub.
 3. Render → **New → Blueprint** → select the repo. It reads `render.yaml` and creates the
-   Docker web service with generated `ADMIN_TOKEN` / `SECRET_KEY`.
+   Docker web service with `ENVIRONMENT=production` and generated `ADMIN_TOKEN` / `SECRET_KEY`
+   (the app refuses to boot on the dev defaults once `ENVIRONMENT` is deployed). Creating the
+   service by hand instead? Set all three yourself.
 4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy. `render.yaml`
    sets `SEED_DEMO_DATA=true`, so first boot builds the shared demo dataset automatically —
    every visitor sees it immediately, no manual step needed.
@@ -183,9 +189,10 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 
 | Var | Default | Purpose |
 |---|---|---|
+| `ENVIRONMENT` | `development` | Set to `production` (or `staging`) on a deployed host. The app then **refuses to start** if `ADMIN_TOKEN` or `SECRET_KEY` is still the dev default. |
 | `DATABASE_URL` | local compose value | Postgres. `postgres://` / `postgresql://` auto-rewritten to the psycopg3 driver. |
-| `ADMIN_TOKEN` | `dev-admin-token` | `X-Admin-Token` for key management + provider status. |
-| `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing. |
+| `ADMIN_TOKEN` | `dev-admin-token` | `X-Admin-Token` for key management + provider status. Must be overridden when `ENVIRONMENT` is deployed. |
+| `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | `""` | Server-side provider creds. Blank ⇒ provider shows "not configured" and stays simulated. Never stored in the DB or shown in the UI. |
 | `ENABLE_LIVE` | `false` | Master switch for real upstream calls. Keep `false` for the public demo. |

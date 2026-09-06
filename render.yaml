@@ -9,6 +9,10 @@ services:
     healthCheckPath: /healthz
     autoDeploy: true
     envVars:
+      # Marks this as a deployed environment: the app refuses to start on the
+      # built-in dev ADMIN_TOKEN / SECRET_KEY (both generated below).
+      - key: ENVIRONMENT
+        value: production
       - key: DATABASE_URL
         sync: false
       - key: ADMIN_TOKEN

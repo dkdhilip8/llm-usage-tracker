@@ -1,4 +1,11 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Built-in development defaults. Fine locally; refused when ENVIRONMENT is a
+# deployed one (see _reject_dev_secrets_when_deployed).
+_DEV_ADMIN_TOKEN = "dev-admin-token"
+_DEV_SECRET_KEY = "dev-secret"
+_DEPLOYED_ENVS = {"production", "prod", "staging"}
 
 
 class Settings(BaseSettings):
@@ -6,6 +13,10 @@ class Settings(BaseSettings):
     with zero env vars for local experimentation."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    # Deployment context. "development" (default) keeps the dev-default secrets
+    # usable; a deployed value (production/staging) makes them a hard startup error.
+    ENVIRONMENT: str = "development"
 
     # Postgres. Render/Neon hand out `postgres://` or `postgresql://`; `sqlalchemy_url`
     # rewrites the scheme to the psycopg3 driver.
@@ -45,6 +56,24 @@ class Settings(BaseSettings):
     SEED_DEMO_DATA: bool = False
 
     VERSION: str = "0.7.0"
+
+    @model_validator(mode="after")
+    def _reject_dev_secrets_when_deployed(self) -> "Settings":
+        """Fail closed: a deployed ENVIRONMENT must not run on the built-in
+        development ADMIN_TOKEN / SECRET_KEY."""
+        if self.ENVIRONMENT.strip().lower() in _DEPLOYED_ENVS:
+            offenders = []
+            if self.ADMIN_TOKEN == _DEV_ADMIN_TOKEN:
+                offenders.append("ADMIN_TOKEN")
+            if self.SECRET_KEY == _DEV_SECRET_KEY:
+                offenders.append("SECRET_KEY")
+            if offenders:
+                raise ValueError(
+                    f"ENVIRONMENT={self.ENVIRONMENT!r} but {', '.join(offenders)} "
+                    "still set to the built-in development default. Set a real "
+                    "value (Render's blueprint generates one automatically)."
+                )
+        return self
 
     @property
     def sqlalchemy_url(self) -> str:

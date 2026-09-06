@@ -3,7 +3,9 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.types import Scope
 
 from app import providers
 from app.config import settings
@@ -13,6 +15,21 @@ from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
 STATIC_DIR = Path(__file__).parent / "static"
+
+
+class SPAStaticFiles(StaticFiles):
+    """Serve the built SPA. Real files are resolved by StaticFiles, whose
+    lookup enforces path containment (traversal attempts resolve outside the
+    directory and 404). Any other unmatched path returns index.html so
+    client-side routes (/dashboard, /insights, ...) survive a refresh."""
+
+    async def get_response(self, path: str, scope: Scope):
+        try:
+            return await super().get_response(path, scope)
+        except StarletteHTTPException as exc:
+            if exc.status_code != 404:
+                raise
+            return await super().get_response("index.html", scope)
 
 
 @asynccontextmanager
@@ -61,13 +78,7 @@ app.include_router(demo.router)
 app.include_router(usage.router)
 
 
-# Serve the built React SPA (only present in the production image). Registered last
+# Serve the built React SPA (only present in the production image). Mounted last
 # so /api/*, /v1/*, /healthz, /docs all take precedence.
 if STATIC_DIR.is_dir():
-
-    @app.get("/{full_path:path}", include_in_schema=False)
-    def serve_spa(full_path: str) -> FileResponse:
-        candidate = STATIC_DIR / full_path
-        if full_path and candidate.is_file():
-            return FileResponse(candidate)
-        return FileResponse(STATIC_DIR / "index.html")
+    app.mount("/", SPAStaticFiles(directory=STATIC_DIR, html=True), name="spa")
