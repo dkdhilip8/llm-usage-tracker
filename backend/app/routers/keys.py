@@ -4,18 +4,16 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.db import get_db
 from app.gateway import period_spend
-from app.models import AllowedProvider, UsageLog, VirtualKey
+from app.models import AllowedProvider, UsageLog, User, VirtualKey
 from app.providers import SUPPORTED
 from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUpdate
-from app.security import new_key, require_admin
+from app.security import new_key, require_user
 
-# Whole router is admin-only. The public dashboard never touches these endpoints;
-# it reads /api/usage/* instead.
-router = APIRouter(
-    prefix="/api/keys", tags=["keys"], dependencies=[Depends(require_admin)]
-)
+# Any signed-in user manages their own keys; admin sees/edits everyone's.
+router = APIRouter(prefix="/api/keys", tags=["keys"])
 
 
 def _validate_providers(names: list[str]) -> list[str]:
@@ -42,11 +40,30 @@ def _custom_window(body) -> tuple[datetime, datetime]:
     return start, end
 
 
+def _owned(db: Session, key_id: int, user: User) -> VirtualKey:
+    vk = db.get(VirtualKey, key_id)
+    if vk is None:
+        raise HTTPException(404, "key not found")
+    if vk.user_id != user.id and not user.is_admin:
+        raise HTTPException(404, "key not found")  # don't reveal other users' key ids
+    return vk
+
+
 @router.post("", response_model=KeyCreated)
-def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
+def create_key(
+    body: KeyCreate, db: Session = Depends(get_db), user: User = Depends(require_user)
+) -> KeyCreated:
     label = body.label.strip()
     if not label:
         raise HTTPException(422, "label is required")
+    if not user.is_admin:
+        owned = db.scalar(
+            select(func.count()).select_from(VirtualKey).where(VirtualKey.user_id == user.id)
+        )
+        if (owned or 0) >= settings.MAX_KEYS_PER_USER:
+            raise HTTPException(
+                409, f"key limit reached ({settings.MAX_KEYS_PER_USER} per account)"
+            )
     providers = _validate_providers(body.allowed_providers)
     if body.default_provider and body.default_provider not in providers:
         raise HTTPException(422, "default_provider must be one of allowed_providers")
@@ -57,10 +74,11 @@ def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
 
     raw, hashed, prefix = new_key()
     vk = VirtualKey(
+        user_id=user.id,
         label=label,
         key_hash=hashed,
         key_prefix=prefix,
-        allow_live=body.allow_live,
+        allow_live=body.allow_live and user.is_admin,  # live mode is admin-only
         default_provider=body.default_provider,
         monthly_budget_usd=body.monthly_budget_usd,
         budget_period=body.budget_period,
@@ -75,7 +93,9 @@ def create_key(body: KeyCreate, db: Session = Depends(get_db)) -> KeyCreated:
 
 
 @router.get("", response_model=list[KeyOut])
-def list_keys(db: Session = Depends(get_db)) -> list[KeyOut]:
+def list_keys(
+    db: Session = Depends(get_db), user: User = Depends(require_user)
+) -> list[KeyOut]:
     rollup = {
         row[0]: (row[1], int(row[2]), float(row[3]))
         for row in db.execute(
@@ -87,7 +107,13 @@ def list_keys(db: Session = Depends(get_db)) -> list[KeyOut]:
             ).group_by(UsageLog.key_id)
         ).all()
     }
-    keys = db.scalars(select(VirtualKey).order_by(VirtualKey.created_at.desc())).all()
+    stmt = select(VirtualKey).order_by(VirtualKey.created_at.desc())
+    if not user.is_admin:
+        stmt = stmt.where(VirtualKey.user_id == user.id)
+    keys = db.scalars(stmt).all()
+    emails = (
+        {u.id: u.email for u in db.scalars(select(User))} if user.is_admin else {}
+    )
     out: list[KeyOut] = []
     for k in keys:
         requests, total_tokens, cost = rollup.get(k.id, (0, 0, 0.0))
@@ -96,6 +122,7 @@ def list_keys(db: Session = Depends(get_db)) -> list[KeyOut]:
                 id=k.id,
                 label=k.label,
                 key_prefix=k.key_prefix,
+                owner_email=emails.get(k.user_id) if user.is_admin else None,
                 allowed_providers=k.provider_names(),
                 allow_live=k.allow_live,
                 default_provider=k.default_provider,
@@ -116,12 +143,12 @@ def list_keys(db: Session = Depends(get_db)) -> list[KeyOut]:
 
 
 @router.patch("/{key_id}")
-def update_key(key_id: int, body: KeyUpdate, db: Session = Depends(get_db)) -> dict:
-    vk = db.get(VirtualKey, key_id)
-    if vk is None:
-        raise HTTPException(404, "key not found")
+def update_key(
+    key_id: int, body: KeyUpdate, db: Session = Depends(get_db), user: User = Depends(require_user)
+) -> dict:
+    vk = _owned(db, key_id, user)
     if body.allow_live is not None:
-        vk.allow_live = body.allow_live
+        vk.allow_live = body.allow_live and user.is_admin
     if body.default_provider is not None:
         if body.default_provider and body.default_provider not in vk.provider_names():
             raise HTTPException(422, "default_provider must be one of allowed_providers")
@@ -149,10 +176,10 @@ def update_key(key_id: int, body: KeyUpdate, db: Session = Depends(get_db)) -> d
 
 
 @router.delete("/{key_id}")
-def revoke_key(key_id: int, db: Session = Depends(get_db)) -> dict:
-    vk = db.get(VirtualKey, key_id)
-    if vk is None:
-        raise HTTPException(404, "key not found")
+def revoke_key(
+    key_id: int, db: Session = Depends(get_db), user: User = Depends(require_user)
+) -> dict:
+    vk = _owned(db, key_id, user)
     if vk.revoked_at is None:
         vk.revoked_at = datetime.now(UTC)
         db.commit()

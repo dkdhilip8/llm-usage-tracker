@@ -7,13 +7,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api } from "./api";
+import { api, type AuthUser } from "./api";
 
 interface AuthCtx {
+  user: AuthUser | null;
   authenticated: boolean;
-  username: string | null;
+  isAdmin: boolean;
   loading: boolean;
-  login: (username: string, password: string) => Promise<void>;
+  login: (email: string, password: string) => Promise<void>;
+  signup: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -21,15 +23,15 @@ interface AuthCtx {
 const Ctx = createContext<AuthCtx | null>(null);
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [username, setUsername] = useState<string | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
     try {
       const me = await api.me();
-      setUsername(me.authenticated ? me.username : null);
+      setUser(me.authenticated ? me.user : null);
     } catch {
-      setUsername(null);
+      setUser(null);
     } finally {
       setLoading(false);
     }
@@ -39,26 +41,31 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  const login = useCallback(async (u: string, p: string) => {
-    const r = await api.login(u, p);
-    setUsername(r.username);
+  const login = useCallback(async (email: string, password: string) => {
+    setUser((await api.login(email, password)).user);
+  }, []);
+
+  const signup = useCallback(async (email: string, password: string) => {
+    setUser((await api.signup(email, password)).user);
   }, []);
 
   const logout = useCallback(async () => {
     await api.logout();
-    setUsername(null);
+    setUser(null);
   }, []);
 
   const value = useMemo<AuthCtx>(
     () => ({
-      authenticated: username !== null,
-      username,
+      user,
+      authenticated: user !== null,
+      isAdmin: !!user?.is_admin,
       loading,
       login,
+      signup,
       logout,
       refresh,
     }),
-    [username, loading, login, logout, refresh],
+    [user, loading, login, signup, logout, refresh],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

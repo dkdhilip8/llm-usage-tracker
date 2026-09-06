@@ -33,15 +33,15 @@ def test_demo_reset_is_deterministic(client, admin):
     assert client.get("/api/usage/summary").json()["total_requests"] == b["usage_rows"]
 
 
-def test_public_cannot_mutate_shared_data(client):
-    assert client.get("/api/keys").status_code == 403
+def test_anonymous_cannot_mutate_shared_data(client):
+    assert client.get("/api/keys").status_code == 401  # sign in required
     assert (
         client.post(
             "/api/keys", json={"label": "x", "allowed_providers": ["openai"]}
         ).status_code
-        == 403
+        == 401
     )
-    assert client.post("/api/demo/reset").status_code == 403
+    assert client.post("/api/demo/reset").status_code == 403  # admin only
     assert client.post("/api/insights/demo-spike").status_code == 403
     # the proxy still needs a virtual key -> no anonymous writes to usage_logs
     assert (
@@ -51,3 +51,9 @@ def test_public_cannot_mutate_shared_data(client):
         ).status_code
         == 401
     )
+
+
+def test_regular_user_cannot_reset_demo(signup):
+    c, _ = signup()
+    assert c.post("/api/demo/reset").status_code == 403
+    assert c.post("/api/insights/demo-spike").status_code == 403

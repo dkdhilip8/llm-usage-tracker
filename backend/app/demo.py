@@ -1,14 +1,8 @@
-"""Shared demo dataset — deterministic keys + ~30 days of simulated usage.
+"""Deterministic simulated datasets: the big shared *demo user* dataset (seen by
+logged-out visitors) and a small per-user sample seeded on signup.
 
-The public deployment is a single shared demo: every visitor sees the same
-pre-populated data. This module (re)builds it. It is admin-only at the API layer
-(`POST /api/demo/reset`) and can also run once on boot (`SEED_DEMO_DATA=true`)
-so a fresh database self-populates.
-
-Everything here is `simulated` / `configured` pricing — no provider calls. The
-demo keys get random unusable hashes (no raw key is produced), so nothing here
-can be used to send real traffic.
-"""
+Everything here is `simulated` / `configured` pricing — no provider calls. Keys
+get random unusable hashes (no raw key is produced)."""
 
 import random
 import secrets
@@ -17,74 +11,61 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.bootstrap import demo_user_id
 from app.models import AllowedProvider, UsageLog, VirtualKey
 from app.pricing import estimate_cost
 
 SEED = 20260904
-HISTORY_DAYS = 30
-
-# label -> (allowed providers, monthly budget or None, base requests/day,
-#           [(provider, model, weight, tier), ...])
 _SMALL, _MID, _LARGE = "small", "mid", "large"
 
-_KEYS: list[tuple[str, list[str], float | None, int, list[tuple[str, str, float, str]]]] = [
-    (
-        "Engineering",
-        ["openai", "anthropic", "openrouter"],
-        50.0,
-        14,
-        [
-            ("openai", "gpt-4o-mini", 0.40, _SMALL),
-            ("openai", "gpt-4o", 0.25, _LARGE),
-            ("openai", "o4-mini", 0.15, _MID),
-            ("anthropic", "claude-3-5-sonnet", 0.10, _LARGE),
-            ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.10, _MID),
-        ],
-    ),
-    (
-        "Data Science",
-        ["openai", "anthropic"],
-        30.0,
-        9,
-        [
-            ("openai", "gpt-4o", 0.30, _LARGE),
-            ("anthropic", "claude-3-5-sonnet", 0.30, _LARGE),
-            ("anthropic", "claude-3-7-sonnet", 0.20, _LARGE),
-            ("openai", "gpt-4o-mini", 0.20, _SMALL),
-        ],
-    ),
-    (
-        "Support Bot",
-        ["openrouter"],
-        10.0,
-        20,
-        [
-            ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.60, _MID),
-            ("openrouter", "google/gemini-2.5-flash-lite", 0.30, _SMALL),
-            ("openrouter", "deepseek/deepseek-chat-v3.1", 0.10, _MID),
-        ],
-    ),
-    (
-        "Content Team",
-        ["anthropic", "openrouter"],
-        None,
-        7,
-        [
-            ("anthropic", "claude-3-5-haiku", 0.50, _SMALL),
-            ("anthropic", "claude-3-5-sonnet", 0.20, _LARGE),
-            ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.30, _MID),
-        ],
-    ),
-    (
-        "Mobile App",
-        ["openai"],
-        20.0,
-        11,
-        [
-            ("openai", "gpt-4o-mini", 0.70, _SMALL),
-            ("openai", "o4-mini", 0.30, _MID),
-        ],
-    ),
+# (label, providers, monthly budget or None, base requests/day,
+#  [(provider, model, weight, tier), ...])
+KeySpec = tuple[str, list[str], float | None, int, list[tuple[str, str, float, str]]]
+
+_DEMO_KEYS: list[KeySpec] = [
+    ("Engineering", ["openai", "anthropic", "openrouter"], 50.0, 14, [
+        ("openai", "gpt-4o-mini", 0.40, _SMALL),
+        ("openai", "gpt-4o", 0.25, _LARGE),
+        ("openai", "o4-mini", 0.15, _MID),
+        ("anthropic", "claude-3-5-sonnet", 0.10, _LARGE),
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.10, _MID),
+    ]),
+    ("Data Science", ["openai", "anthropic"], 30.0, 9, [
+        ("openai", "gpt-4o", 0.30, _LARGE),
+        ("anthropic", "claude-3-5-sonnet", 0.30, _LARGE),
+        ("anthropic", "claude-3-7-sonnet", 0.20, _LARGE),
+        ("openai", "gpt-4o-mini", 0.20, _SMALL),
+    ]),
+    ("Support Bot", ["openrouter"], 10.0, 20, [
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.60, _MID),
+        ("openrouter", "google/gemini-2.5-flash-lite", 0.30, _SMALL),
+        ("openrouter", "deepseek/deepseek-chat-v3.1", 0.10, _MID),
+    ]),
+    ("Content Team", ["anthropic", "openrouter"], None, 7, [
+        ("anthropic", "claude-3-5-haiku", 0.50, _SMALL),
+        ("anthropic", "claude-3-5-sonnet", 0.20, _LARGE),
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.30, _MID),
+    ]),
+    ("Mobile App", ["openai"], 20.0, 11, [
+        ("openai", "gpt-4o-mini", 0.70, _SMALL),
+        ("openai", "o4-mini", 0.30, _MID),
+    ]),
+]
+
+_SAMPLE_KEYS: list[KeySpec] = [
+    ("My app", ["openai", "openrouter"], None, 9, [
+        ("openai", "gpt-4o-mini", 0.55, _SMALL),
+        ("openai", "gpt-4o", 0.25, _LARGE),
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.20, _MID),
+    ]),
+    ("Batch jobs", ["openrouter"], 5.0, 6, [
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.7, _MID),
+        ("openrouter", "google/gemini-2.5-flash-lite", 0.3, _SMALL),
+    ]),
+    ("Chat feature", ["anthropic"], None, 7, [
+        ("anthropic", "claude-3-5-haiku", 0.7, _SMALL),
+        ("anthropic", "claude-3-5-sonnet", 0.3, _LARGE),
+    ]),
 ]
 
 _TOKENS = {
@@ -96,8 +77,9 @@ _LATENCY = {_SMALL: (700, 250), _MID: (1400, 500), _LARGE: (2600, 900)}
 _ERROR_RATE = 0.015
 
 
-def _mk_key(label: str, providers: list[str], budget: float | None) -> VirtualKey:
+def _mk_key(user_id: int, label: str, providers: list[str], budget: float | None) -> VirtualKey:
     return VirtualKey(
+        user_id=user_id,
         label=label,
         key_hash=secrets.token_hex(32),  # random & unusable — no raw key exists
         key_prefix="vk_demo_" + secrets.token_hex(2),
@@ -109,14 +91,7 @@ def _mk_key(label: str, providers: list[str], budget: float | None) -> VirtualKe
     )
 
 
-def _row(
-    rng: random.Random,
-    key: VirtualKey,
-    provider: str,
-    model: str,
-    tier: str,
-    ts: datetime,
-) -> UsageLog:
+def _row(rng: random.Random, key_id: int, provider: str, model: str, tier: str, ts: datetime) -> UsageLog:
     (p_lo, p_hi), (c_lo, c_hi) = _TOKENS[tier]
     pt = rng.randint(p_lo, p_hi)
     ct = rng.randint(c_lo, c_hi)
@@ -126,7 +101,7 @@ def _row(
     mu, sigma = _LATENCY[tier]
     latency = int(min(8000, max(120, rng.gauss(mu, sigma))))
     return UsageLog(
-        key_id=key.id,
+        key_id=key_id,
         request_id=secrets.token_hex(16),
         provider=provider,
         model=model,
@@ -143,78 +118,80 @@ def _row(
     )
 
 
-def _generate(db: Session) -> int:
-    rng = random.Random(SEED)
+def _wipe_user(db: Session, user_id: int) -> None:
+    # ON DELETE CASCADE on virtual_keys drops the user's usage_logs + allowed_providers
+    db.query(VirtualKey).filter(VirtualKey.user_id == user_id).delete(synchronize_session=False)
+    db.flush()
+
+
+def _generate(db: Session, user_id: int, specs: list[KeySpec], *, days: int, spike: int, seed: int) -> int:
+    rng = random.Random(seed)
     now = datetime.now(UTC)
     rows: list[UsageLog] = []
 
-    keys: list[tuple[VirtualKey, int, list[tuple[str, str, str]], list[float]]] = []
-    for label, providers, budget, per_day, mix in _KEYS:
-        vk = _mk_key(label, providers, budget)
+    keys = []
+    for label, providers, budget, per_day, mix in specs:
+        vk = _mk_key(user_id, label, providers, budget)
         db.add(vk)
-        models = [(m[0], m[1], m[3]) for m in mix]
-        weights = [m[2] for m in mix]
-        keys.append((vk, per_day, models, weights))
+        keys.append((vk, per_day, [(m[0], m[1], m[3]) for m in mix], [m[2] for m in mix]))
     db.flush()  # assign ids
 
-    for d in range(HISTORY_DAYS, 0, -1):
+    for d in range(days, 0, -1):
         day = now - timedelta(days=d)
         weekend = day.weekday() >= 5
         for vk, per_day, models, weights in keys:
-            factor = (0.35 if weekend else 1.0) * rng.uniform(0.7, 1.3)
-            count = max(0, round(per_day * factor))
+            count = max(0, round(per_day * (0.35 if weekend else 1.0) * rng.uniform(0.7, 1.3)))
             for _ in range(count):
                 provider, model, tier = rng.choices(models, weights=weights, k=1)[0]
                 ts = day + timedelta(seconds=rng.uniform(0, 86_400))
                 if ts >= now:
                     ts = now - timedelta(minutes=rng.uniform(1, 90))
-                rows.append(_row(rng, vk, provider, model, tier, ts))
+                rows.append(_row(rng, vk.id, provider, model, tier, ts))
 
-    # A deliberate last-~20h anomaly: Engineering hammers gpt-4o with big prompts.
+    # a deliberate last-~20h cost spike on the first key -> Insights fires
     eng = keys[0][0]
-    for _ in range(32):
+    for _ in range(spike):
         ts = now - timedelta(minutes=rng.uniform(15, 1200))
-        pt = rng.randint(1500, 3000)
-        ct = rng.randint(1200, 2200)
-        rows.append(
-            UsageLog(
-                key_id=eng.id,
-                request_id=secrets.token_hex(16),
-                provider="openai",
-                model="gpt-4o",
-                prompt_tokens=pt,
-                completion_tokens=ct,
-                total_tokens=pt + ct,
-                cost=estimate_cost("openai", "gpt-4o", pt, ct),
-                cost_source="configured",
-                simulated=True,
-                mode="simulated",
-                latency_ms=int(min(9000, max(600, rng.gauss(3200, 1100)))),
-                status="success",
-                ts=ts,
-            )
-        )
+        pt, ct = rng.randint(1500, 3000), rng.randint(1200, 2200)
+        rows.append(_row(rng, eng.id, "openai", "gpt-4o", _LARGE, ts))
+        rows[-1].prompt_tokens, rows[-1].completion_tokens = pt, ct
+        rows[-1].total_tokens = pt + ct
+        rows[-1].cost = estimate_cost("openai", "gpt-4o", pt, ct)
+        rows[-1].status = "success"
 
     db.add_all(rows)
     return len(rows)
 
 
 def reset_demo_data(db: Session) -> dict:
-    """Wipe all keys + usage and rebuild the shared demo dataset. Deterministic:
-    the same seed produces the same ~30-day history and the same recent spike."""
-    db.query(UsageLog).delete(synchronize_session=False)
-    db.query(AllowedProvider).delete(synchronize_session=False)
-    db.query(VirtualKey).delete(synchronize_session=False)
-    db.flush()
-    inserted = _generate(db)
+    """Rebuild the shared demo-user dataset (logged-out view). Scoped to the demo
+    account — never touches real users' data."""
+    uid = demo_user_id(db)
+    _wipe_user(db, uid)
+    inserted = _generate(db, uid, _DEMO_KEYS, days=30, spike=32, seed=SEED)
     db.commit()
-    return {"keys": len(_KEYS), "usage_rows": inserted, "days": HISTORY_DAYS}
+    return {"keys": len(_DEMO_KEYS), "usage_rows": inserted, "days": 30}
+
+
+def seed_user_sample(db: Session, user_id: int) -> dict:
+    """(Re)build a small starter dataset for one real user."""
+    _wipe_user(db, user_id)
+    inserted = _generate(
+        db, user_id, _SAMPLE_KEYS, days=12, spike=14, seed=SEED ^ (user_id * 2654435761)
+    )
+    db.commit()
+    return {"keys": len(_SAMPLE_KEYS), "usage_rows": inserted, "days": 12}
 
 
 def seed_if_empty(db: Session) -> dict:
-    """Boot hook for SEED_DEMO_DATA=true — build the dataset only when there is
-    no usage yet, so restarts and redeploys don't clobber a curated database."""
-    existing = db.scalar(select(func.count()).select_from(UsageLog)) or 0
+    """Boot hook for SEED_DEMO_DATA=true — build the demo dataset only when the
+    demo account has no usage yet."""
+    uid = demo_user_id(db)
+    existing = db.scalar(
+        select(func.count())
+        .select_from(UsageLog)
+        .where(UsageLog.key_id.in_(select(VirtualKey.id).where(VirtualKey.user_id == uid)))
+    ) or 0
     if existing:
-        return {"skipped": True, "reason": "usage_logs not empty", "existing": int(existing)}
+        return {"skipped": True, "existing": int(existing)}
     return {"skipped": False, **reset_demo_data(db)}

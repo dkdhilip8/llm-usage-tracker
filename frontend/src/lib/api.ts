@@ -39,12 +39,19 @@ export interface ProviderStatus {
   checked_at: string | null;
 }
 
+export interface AuthUser {
+  id: number;
+  email: string;
+  is_admin: boolean;
+}
+
 export type BudgetPeriod = "day" | "week" | "month" | "custom";
 
 export interface KeyRow {
   id: number;
   label: string;
   key_prefix: string;
+  owner_email: string | null;
   allowed_providers: string[];
   allow_live: boolean;
   default_provider: string | null;
@@ -217,14 +224,27 @@ export const api = {
     }>("/healthz"),
   models: () => req<ModelInfo[]>("/api/models"),
 
-  // ---- admin auth ----
-  me: () => req<{ authenticated: boolean; username: string | null }>("/api/auth/me"),
-  login: (username: string, password: string) =>
-    req<{ authenticated: boolean; username: string }>("/api/auth/login", {
+  // ---- auth ----
+  me: () => req<{ authenticated: boolean; user: AuthUser | null }>("/api/auth/me"),
+  login: (email: string, password: string) =>
+    req<{ authenticated: boolean; user: AuthUser }>("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ username, password }),
+      body: JSON.stringify({ email, password }),
+    }),
+  signup: (email: string, password: string) =>
+    req<{ authenticated: boolean; user: AuthUser }>("/api/auth/signup", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
     }),
   logout: () => req<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
+
+  // ---- account self-service ----
+  regenerateSample: () =>
+    req<{ keys: number; usage_rows: number; days: number }>("/api/account/sample", {
+      method: "POST",
+    }),
+  clearMyData: () => req<{ cleared: boolean }>("/api/account/data", { method: "DELETE" }),
+  deleteAccount: () => req<{ deleted: boolean }>("/api/account", { method: "DELETE" }),
 
   // public, read-only
   insights: () => req<{ alerts: InsightAlert[] }>("/api/insights/alerts"),

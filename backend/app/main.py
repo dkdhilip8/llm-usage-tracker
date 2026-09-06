@@ -36,6 +36,9 @@ class SPAStaticFiles(StaticFiles):
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
     with SessionLocal() as db:
+        from app.bootstrap import bootstrap
+
+        bootstrap(db)  # admin + demo users, backfill key ownership
         providers.load_db_keys(db)  # decrypt any admin-entered provider keys
         if settings.SEED_DEMO_DATA:
             from app.demo import seed_if_empty
@@ -55,6 +58,7 @@ if settings.cors_origins_list:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins_list,
+        allow_credentials=True,  # the session cookie rides on cross-origin dev requests
         allow_methods=["*"],
         allow_headers=["*"],
     )

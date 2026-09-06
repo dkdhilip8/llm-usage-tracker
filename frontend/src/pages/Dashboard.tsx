@@ -7,6 +7,7 @@ import {
   type TimeseriesPoint,
   type UsageSummary,
 } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { defaultFilters, toQuery, type Filters } from "../lib/filters";
 import { FilterBar } from "../components/FilterBar";
 import { SummaryCards } from "../components/SummaryCards";
@@ -17,6 +18,7 @@ import { UsageByModelChart } from "../components/UsageByModelChart";
 import { KeyUsageTable } from "../components/KeyUsageTable";
 
 export function Dashboard() {
+  const { authenticated, isAdmin } = useAuth();
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [summary, setSummary] = useState<UsageSummary | null>(null);
@@ -60,10 +62,21 @@ export function Dashboard() {
     api.usageByKey("").then(setAllKeys).catch(() => setAllKeys([]));
   }, []);
 
+  const scopeLabel = !authenticated
+    ? "demo data — sign in to see your own"
+    : isAdmin
+      ? "all accounts"
+      : "your account";
+
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-fg">Organization LLM usage</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-fg">
+            {isAdmin ? "Organization LLM usage" : "LLM usage"}
+          </h1>
+          <div className="text-xs text-fg-subtle">Showing: {scopeLabel}</div>
+        </div>
         <button
           onClick={load}
           className="rounded-md border border-line bg-surface px-3 py-1.5 text-sm text-fg-muted hover:bg-fill"

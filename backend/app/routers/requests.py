@@ -1,7 +1,8 @@
-"""Public request log — recent `usage_logs` rows for the Requests tab.
+"""Request log — recent `usage_logs` rows for the Requests tab, scoped to the
+viewer (demo data when logged out, your own when logged in, all for admin).
 
-Read-only and safe to expose on the shared demo: prompt/response previews are
-only populated when LOG_BODIES=true, which stays off on the public deploy."""
+Prompt/response previews are only populated when LOG_BODIES=true, off on the
+public deploy."""
 
 from datetime import datetime
 
@@ -12,6 +13,7 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models import UsageLog, VirtualKey
+from app.scoping import Viewer, scope_usage, viewer
 
 router = APIRouter(prefix="/api", tags=["requests"])
 
@@ -28,13 +30,15 @@ def list_requests(
     start: datetime | None = None,
     end: datetime | None = None,
     db: Session = Depends(get_db),
+    v: Viewer = Depends(viewer),
 ) -> dict:
     limit = max(1, min(limit, 200))
-    stmt: Select = (
+    stmt: Select = scope_usage(
         select(UsageLog, VirtualKey.label, VirtualKey.key_prefix)
         .join(VirtualKey, VirtualKey.id == UsageLog.key_id)
         .order_by(UsageLog.id.desc())
-        .limit(limit + 1)
+        .limit(limit + 1),
+        v.user_id,
     )
     if cursor is not None:
         stmt = stmt.where(UsageLog.id < cursor)

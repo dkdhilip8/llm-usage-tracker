@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from app.db import get_db
 from app.models import UsageLog, VirtualKey
 from app.pricing import models_catalog
+from app.scoping import Viewer, scope_usage, viewer
 
 router = APIRouter(prefix="/api", tags=["usage"])
 
@@ -52,33 +53,38 @@ def usage_summary(
     model: str | None = None,
     key_id: int | None = None,
     db: Session = Depends(get_db),
+    v: Viewer = Depends(viewer),
 ) -> dict:
-    stmt = _apply_filters(
-        select(
-            func.count().label("total_requests"),
-            func.coalesce(func.sum(UsageLog.total_tokens), 0),
-            func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
-            func.coalesce(func.sum(UsageLog.completion_tokens), 0),
-            func.coalesce(func.sum(UsageLog.cost), 0),
-            _actual,
-            _estimated,
-            func.percentile_cont(0.5).within_group(UsageLog.latency_ms.asc()),
-            func.percentile_cont(0.95).within_group(UsageLog.latency_ms.asc()),
-            func.coalesce(
-                func.sum(case((UsageLog.status == "error", 1), else_=0)), 0
+    stmt = scope_usage(
+        _apply_filters(
+            select(
+                func.count().label("total_requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0),
+                func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageLog.completion_tokens), 0),
+                func.coalesce(func.sum(UsageLog.cost), 0),
+                _actual,
+                _estimated,
+                func.percentile_cont(0.5).within_group(UsageLog.latency_ms.asc()),
+                func.percentile_cont(0.95).within_group(UsageLog.latency_ms.asc()),
+                func.coalesce(
+                    func.sum(case((UsageLog.status == "error", 1), else_=0)), 0
+                ),
+                func.coalesce(func.sum(UsageLog.latency_ms), 0),
             ),
-            func.coalesce(func.sum(UsageLog.latency_ms), 0),
+            start,
+            end,
+            provider,
+            model,
+            key_id,
         ),
-        start,
-        end,
-        provider,
-        model,
-        key_id,
+        v.user_id,
     )
     row = db.execute(stmt).one()
-    active_keys = db.scalar(
-        select(func.count()).select_from(VirtualKey).where(VirtualKey.revoked_at.is_(None))
-    )
+    ak_stmt = select(func.count()).select_from(VirtualKey).where(VirtualKey.revoked_at.is_(None))
+    if v.user_id is not None:
+        ak_stmt = ak_stmt.where(VirtualKey.user_id == v.user_id)
+    active_keys = db.scalar(ak_stmt)
     total_requests = row[0]
     errors = int(row[9])
     latency_sum_s = float(row[10]) / 1000.0
@@ -108,21 +114,25 @@ def usage_timeseries(
     key_id: int | None = None,
     bucket: str = "day",
     db: Session = Depends(get_db),
+    v: Viewer = Depends(viewer),
 ) -> list[dict]:
     day = func.date_trunc(bucket, UsageLog.ts).label("day")
-    stmt = _apply_filters(
-        select(
-            day,
-            UsageLog.provider,
-            func.count().label("requests"),
-            func.coalesce(func.sum(UsageLog.total_tokens), 0),
-            func.coalesce(func.sum(UsageLog.cost), 0),
+    stmt = scope_usage(
+        _apply_filters(
+            select(
+                day,
+                UsageLog.provider,
+                func.count().label("requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0),
+                func.coalesce(func.sum(UsageLog.cost), 0),
+            ),
+            start,
+            end,
+            provider,
+            model,
+            key_id,
         ),
-        start,
-        end,
-        provider,
-        model,
-        key_id,
+        v.user_id,
     ).group_by(day, UsageLog.provider).order_by(day)
     return [
         {
@@ -144,24 +154,28 @@ def usage_by_key(
     model: str | None = None,
     key_id: int | None = None,
     db: Session = Depends(get_db),
+    v: Viewer = Depends(viewer),
 ) -> list[dict]:
-    stmt = _apply_filters(
-        select(
-            UsageLog.key_id,
-            VirtualKey.label,
-            VirtualKey.key_prefix,
-            func.count().label("requests"),
-            func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
-            func.coalesce(func.sum(UsageLog.completion_tokens), 0),
-            func.coalesce(func.sum(UsageLog.total_tokens), 0),
-            func.coalesce(func.sum(UsageLog.cost), 0),
-            func.max(UsageLog.ts),
+    stmt = scope_usage(
+        _apply_filters(
+            select(
+                UsageLog.key_id,
+                VirtualKey.label,
+                VirtualKey.key_prefix,
+                func.count().label("requests"),
+                func.coalesce(func.sum(UsageLog.prompt_tokens), 0),
+                func.coalesce(func.sum(UsageLog.completion_tokens), 0),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0),
+                func.coalesce(func.sum(UsageLog.cost), 0),
+                func.max(UsageLog.ts),
+            ),
+            start,
+            end,
+            provider,
+            model,
+            key_id,
         ),
-        start,
-        end,
-        provider,
-        model,
-        key_id,
+        v.user_id,
     ).join(VirtualKey, VirtualKey.id == UsageLog.key_id).group_by(
         UsageLog.key_id, VirtualKey.label, VirtualKey.key_prefix
     ).order_by(func.coalesce(func.sum(UsageLog.cost), 0).desc())
@@ -189,20 +203,24 @@ def usage_by_model(
     model: str | None = None,
     key_id: int | None = None,
     db: Session = Depends(get_db),
+    v: Viewer = Depends(viewer),
 ) -> list[dict]:
-    stmt = _apply_filters(
-        select(
-            UsageLog.provider,
-            UsageLog.model,
-            func.count().label("requests"),
-            func.coalesce(func.sum(UsageLog.total_tokens), 0),
-            func.coalesce(func.sum(UsageLog.cost), 0),
+    stmt = scope_usage(
+        _apply_filters(
+            select(
+                UsageLog.provider,
+                UsageLog.model,
+                func.count().label("requests"),
+                func.coalesce(func.sum(UsageLog.total_tokens), 0),
+                func.coalesce(func.sum(UsageLog.cost), 0),
+            ),
+            start,
+            end,
+            provider,
+            model,
+            key_id,
         ),
-        start,
-        end,
-        provider,
-        model,
-        key_id,
+        v.user_id,
     ).group_by(UsageLog.provider, UsageLog.model).order_by(
         func.coalesce(func.sum(UsageLog.total_tokens), 0).desc()
     )

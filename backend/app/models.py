@@ -18,10 +18,31 @@ from sqlalchemy.orm import Mapped, mapped_column, relationship
 from app.db import Base
 
 
+class User(Base):
+    """A signed-up account. `is_admin` users (the env ADMIN_USERNAME row, created
+    on boot) see everything; regular users only see their own keys + usage."""
+
+    __tablename__ = "users"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)  # login id
+    # "<salt_hex>$<scrypt_hex>", or "" for unusable (the demo account).
+    password_hash: Mapped[str] = mapped_column(String, nullable=False, default="")
+    is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class VirtualKey(Base):
     __tablename__ = "virtual_keys"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Owning account. Nullable for a smooth migration; backfilled to the demo user on boot.
+    user_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
     label: Mapped[str] = mapped_column(String, nullable=False)
     # HMAC-SHA256(SECRET_KEY, raw_key), hex. The raw key is shown once and never stored.
     key_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)

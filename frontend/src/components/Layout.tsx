@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { NavLink } from "react-router-dom";
 import { DemoBanner } from "./DemoBanner";
+import { useAuth } from "../lib/auth";
 import { useTheme } from "../lib/theme";
 
 const linkBase = "px-3 py-1.5 rounded-md text-sm font-medium transition-colors";
@@ -35,6 +36,7 @@ function ThemeToggle() {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
+  const { authenticated, isAdmin } = useAuth();
   return (
     <div className="flex min-h-full flex-col">
       <DemoBanner />
@@ -51,18 +53,26 @@ export function Layout({ children }: { children: ReactNode }) {
             <NavLink to="/dashboard" className={navClass}>
               Dashboard
             </NavLink>
-            <NavLink to="/playground" className={navClass}>
-              Playground
-            </NavLink>
             <NavLink to="/requests" className={navClass}>
               Requests
             </NavLink>
             <NavLink to="/insights" className={navClass}>
               Insights
             </NavLink>
-            <NavLink to="/admin" className={navClass}>
-              Admin
-            </NavLink>
+            {authenticated && (
+              <NavLink to="/playground" className={navClass}>
+                Playground
+              </NavLink>
+            )}
+            {authenticated ? (
+              <NavLink to="/account" className={navClass}>
+                {isAdmin ? "Admin" : "Account"}
+              </NavLink>
+            ) : (
+              <NavLink to="/login" className={navClass}>
+                Sign in
+              </NavLink>
+            )}
             <ThemeToggle />
           </nav>
         </div>

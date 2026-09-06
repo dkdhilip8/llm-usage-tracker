@@ -6,6 +6,7 @@ target resolution + provider ACL, monthly-budget enforcement, the simulate-vs-li
 decision, and the usage-log write."""
 
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -17,9 +18,54 @@ from sqlalchemy.orm import Session
 from app import providers
 from app.config import settings
 from app.db import SessionLocal
-from app.models import UsageLog, VirtualKey
+from app.models import UsageLog, User, VirtualKey
 from app.pricing import PROVIDERS, estimate_cost, price_for
 from app.simulator import simulate_chat
+
+# in-process per-user Playground rate limiter (best-effort, single instance)
+_pg_hits: dict[int, deque[float]] = defaultdict(deque)
+
+
+def enforce_user_quota(db: Session, vk: VirtualKey) -> None:
+    """Per-account caps for signed-up users (admin + the demo account are exempt)."""
+    if vk.user_id is None:
+        return
+    user = db.get(User, vk.user_id)
+    if user is None or user.is_admin or user.is_demo:
+        return
+    now = time.time()
+    q = _pg_hits[user.id]
+    while q and now - q[0] > 3600:
+        q.popleft()
+    if len(q) >= settings.PLAYGROUND_REQUESTS_PER_HOUR:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": f"rate limit: {settings.PLAYGROUND_REQUESTS_PER_HOUR} requests/hour",
+                "type": "rate_limited",
+            },
+        )
+    rows = db.scalar(
+        select(func.count())
+        .select_from(UsageLog)
+        .where(
+            UsageLog.key_id.in_(
+                select(VirtualKey.id).where(VirtualKey.user_id == user.id)
+            )
+        )
+    )
+    if (rows or 0) >= settings.MAX_USAGE_ROWS_PER_USER:
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "message": (
+                    f"usage cap reached ({settings.MAX_USAGE_ROWS_PER_USER} rows). "
+                    "Clear your data from the Account page."
+                ),
+                "type": "quota_exceeded",
+            },
+        )
+    q.append(now)
 
 
 @dataclass

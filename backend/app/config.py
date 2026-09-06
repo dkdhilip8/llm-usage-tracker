@@ -18,13 +18,21 @@ class Settings(BaseSettings):
     # usable; a deployed value (production/staging) makes them a hard startup error.
     ENVIRONMENT: str = "development"
 
-    # ---- admin login (single account) ----
-    ADMIN_USERNAME: str = "admin"
-    # Empty => password login is disabled (the X-Admin-Token header still works).
+    # ---- admin account (the one is_admin=True user, created/updated on boot) ----
+    ADMIN_USERNAME: str = "admin"  # also the admin user's login email
+    # Empty => admin password login disabled (the X-Admin-Token header still works).
     # Required (min 12 chars) when ENVIRONMENT is deployed.
     ADMIN_PASSWORD: str = ""
     # Signed session-cookie lifetime.
     SESSION_TTL_HOURS: int = 168
+
+    # ---- public multi-tenant signup ----
+    ALLOW_SIGNUP: bool = True
+    MAX_USERS: int = 300  # reject signup past this (protects the free DB)
+    SIGNUPS_PER_IP_PER_HOUR: int = 5
+    MAX_KEYS_PER_USER: int = 10
+    MAX_USAGE_ROWS_PER_USER: int = 4000  # proxy stops recording past this
+    PLAYGROUND_REQUESTS_PER_HOUR: int = 120
 
     # ---- provider-credential encryption (only used when ALLOW_DB_PROVIDER_KEYS) ----
     # A urlsafe-base64 32-byte Fernet key. Empty => derived from SECRET_KEY.

@@ -7,6 +7,7 @@ from app.db import get_db
 from app.gateway import (
     authorize_provider,
     enforce_budget,
+    enforce_user_quota,
     record_usage,
     run_completion,
 )
@@ -57,6 +58,7 @@ def proxy_chat(
     prompt = _extract_prompt(body)
     if not prompt:
         raise HTTPException(422, "prompt or messages is required")
+    enforce_user_quota(db, vk)
     enforce_budget(db, vk)
 
     result = run_completion(vk, body.provider, body.model, prompt)

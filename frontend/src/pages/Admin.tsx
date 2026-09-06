@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { Navigate } from "react-router-dom";
 import {
   api,
   PROVIDERS,
@@ -201,7 +202,13 @@ function ProviderPanel() {
   );
 }
 
-function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
+function CreateKeyForm({
+  onCreated,
+  isAdmin = false,
+}: {
+  onCreated: () => void;
+  isAdmin?: boolean;
+}) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>(["openai"]);
   const [allowLive, setAllowLive] = useState(false);
@@ -339,17 +346,23 @@ function CreateKeyForm({ onCreated }: { onCreated: () => void }) {
           </div>
         )}
 
-        <label className="flex items-center gap-2 text-sm text-fg-muted">
-          <input
-            type="checkbox"
-            checked={allowLive}
-            onChange={(e) => setAllowLive(e.target.checked)}
-          />
-          Allow live calls
-          <span className="text-xs text-fg-subtle">
-            (still gated by <code>ENABLE_LIVE</code> + provider validity)
-          </span>
-        </label>
+        {isAdmin ? (
+          <label className="flex items-center gap-2 text-sm text-fg-muted">
+            <input
+              type="checkbox"
+              checked={allowLive}
+              onChange={(e) => setAllowLive(e.target.checked)}
+            />
+            Allow live calls
+            <span className="text-xs text-fg-subtle">
+              (still gated by <code>ENABLE_LIVE</code> + provider validity)
+            </span>
+          </label>
+        ) : (
+          <p className="text-[11px] text-fg-subtle">
+            Keys run in simulated mode. Live provider calls are admin-only on this demo.
+          </p>
+        )}
 
         <button
           onClick={submit}
@@ -450,69 +463,67 @@ function DemoTools({ onChange }: { onChange: () => void }) {
   );
 }
 
-function LoginForm() {
-  const { login } = useAuth();
-  const [username, setUsername] = useState("admin");
-  const [password, setPassword] = useState("");
-  const [err, setErr] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
+function AccountTools({ onChange }: { onChange: () => void }) {
+  const { logout } = useAuth();
+  const [msg, setMsg] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
-    setBusy(true);
-    setErr(null);
-    try {
-      await login(username.trim(), password);
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
+  function run(kind: "sample" | "clear" | "delete") {
+    setBusy(kind);
+    setMsg(null);
+    const call =
+      kind === "sample"
+        ? api.regenerateSample().then((r) => `Rebuilt sample: ${r.keys} keys · ${r.usage_rows} rows.`)
+        : kind === "clear"
+          ? api.clearMyData().then(() => "Your keys and usage were cleared.")
+          : api.deleteAccount().then(() => "account-deleted");
+    call
+      .then((m) => {
+        if (m === "account-deleted") {
+          void logout();
+          return;
+        }
+        setMsg(m);
+        onChange();
+      })
+      .catch((e: Error) => setMsg(e.message))
+      .finally(() => setBusy(null));
   }
 
   return (
-    <div className="mx-auto max-w-md">
-      <Card title="Admin sign in">
-        <p className="mb-3 text-sm text-fg-muted">
-          Manage providers and virtual keys. The Dashboard, Requests and Insights tabs
-          need no sign in.
-        </p>
-        <form onSubmit={submit} className="space-y-3">
-          <label className="block text-xs font-medium text-fg-muted">
-            Username
-            <input
-              className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm"
-              autoComplete="username"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-            />
-          </label>
-          <label className="block text-xs font-medium text-fg-muted">
-            Password
-            <input
-              type="password"
-              autoComplete="current-password"
-              className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </label>
-          {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
-          <button
-            type="submit"
-            disabled={busy || !username.trim() || !password}
-            className="w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            {busy ? "Signing in…" : "Sign in"}
-          </button>
-        </form>
-      </Card>
-    </div>
+    <Card title="Your data">
+      <div className="flex flex-wrap gap-2">
+        <button
+          onClick={() => run("sample")}
+          disabled={busy !== null}
+          className="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+        >
+          {busy === "sample" ? "Rebuilding…" : "Regenerate sample data"}
+        </button>
+        <button
+          onClick={() => window.confirm("Delete all your keys and usage?") && run("clear")}
+          disabled={busy !== null}
+          className="rounded-md border border-line px-3 py-1.5 text-sm text-fg-muted hover:bg-fill disabled:opacity-50"
+        >
+          Clear my data
+        </button>
+        <button
+          onClick={() =>
+            window.confirm("Permanently delete your account and all its data?") && run("delete")
+          }
+          disabled={busy !== null}
+          className="rounded-md border border-red-200 dark:border-red-500/30 px-3 py-1.5 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50"
+        >
+          Delete account
+        </button>
+      </div>
+      {msg && <div className="mt-2 text-xs text-fg-muted">{msg}</div>}
+    </Card>
   );
 }
 
-export function Admin() {
-  const { authenticated, loading, logout } = useAuth();
+export function Account() {
+  const { authenticated, isAdmin, loading, logout, user } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
@@ -532,13 +543,18 @@ export function Admin() {
     return <div className="mx-auto max-w-md p-6 text-sm text-fg-subtle">Loading…</div>;
   }
   if (!authenticated) {
-    return <LoginForm />;
+    return <Navigate to="/login" replace />;
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
-        <h1 className="text-lg font-semibold text-fg">Gateway admin</h1>
+        <div>
+          <h1 className="text-lg font-semibold text-fg">
+            {isAdmin ? "Gateway admin" : "Your account"}
+          </h1>
+          <div className="text-xs text-fg-subtle">{user?.email}</div>
+        </div>
         <button
           onClick={() => {
             void logout();
@@ -557,11 +573,11 @@ export function Admin() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        <ProviderPanel />
-        <CreateKeyForm onCreated={refresh} />
+        {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
+        <CreateKeyForm onCreated={refresh} isAdmin={isAdmin} />
       </div>
 
-      <DemoTools onChange={refresh} />
+      {isAdmin && <DemoTools onChange={refresh} />}
 
       <Card title={`Virtual keys (${keys.length})`}>
         <div className="overflow-x-auto">
@@ -570,6 +586,7 @@ export function Admin() {
               <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-fg-subtle">
                 <th className="py-2 pr-4">Label</th>
                 <th className="py-2 pr-4">Prefix</th>
+                {isAdmin && <th className="py-2 pr-4">Owner</th>}
                 <th className="py-2 pr-4">Allowed providers</th>
                 <th className="py-2 pr-4 text-center">Live</th>
                 <th className="py-2 pr-4 text-right">Requests</th>
@@ -582,7 +599,7 @@ export function Admin() {
             <tbody>
               {keys.length === 0 && (
                 <tr>
-                  <td colSpan={9} className="py-8 text-center text-fg-subtle">
+                  <td colSpan={isAdmin ? 10 : 9} className="py-8 text-center text-fg-subtle">
                     No keys yet — create one above.
                   </td>
                 </tr>
@@ -596,6 +613,11 @@ export function Admin() {
                 >
                   <td className="py-2 pr-4 font-medium">{k.label}</td>
                   <td className="py-2 pr-4 font-mono text-xs">{k.key_prefix}…</td>
+                  {isAdmin && (
+                    <td className="py-2 pr-4 text-xs text-fg-subtle">
+                      {k.owner_email ?? "—"}
+                    </td>
+                  )}
                   <td className="py-2 pr-4">
                     <div className="flex flex-wrap gap-1">
                       {k.allowed_providers.map((p) => (

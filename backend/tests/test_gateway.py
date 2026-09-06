@@ -10,15 +10,15 @@ def test_healthz(client):
     assert j["status"] == "ok" and j["live_enabled"] is False
 
 
-def test_admin_endpoints_require_token(client):
-    assert client.get("/api/keys").status_code == 403
+def test_protected_endpoints_reject_anonymous(client):
+    assert client.get("/api/keys").status_code == 401  # sign in required
     assert (
         client.post(
             "/api/keys", json={"label": "x", "allowed_providers": ["openai"]}
         ).status_code
-        == 403
+        == 401
     )
-    assert client.post("/api/demo/reset").status_code == 403
+    assert client.post("/api/demo/reset").status_code == 403  # admin only
     assert client.post("/api/insights/demo-spike").status_code == 403
 
 
@@ -136,7 +136,7 @@ def test_requests_log_and_metrics(client, admin, make_key):
     assert items and items[0]["provider"] == "openrouter"
     assert items[0]["prompt_preview"] == "log me"  # LOG_BODIES=true in tests
 
-    j = client.get("/api/usage/summary").json()
+    j = client.get("/api/usage/summary", headers=admin).json()
     for key in (
         "latency_p50_ms",
         "latency_p95_ms",

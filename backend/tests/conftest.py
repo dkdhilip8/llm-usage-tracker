@@ -17,6 +17,7 @@ os.environ["SEED_DEMO_DATA"] = "false"
 os.environ["SIMULATE_LATENCY_SLEEP"] = "false"
 os.environ["LOG_BODIES"] = "true"
 os.environ["ALLOW_DB_PROVIDER_KEYS"] = "true"  # dev-only feature, exercised in tests
+os.environ["SIGNUPS_PER_IP_PER_HOUR"] = "1000"  # a throttle test lowers this itself
 # Never let a developer's real provider keys (from ./.env) bleed into tests.
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["ANTHROPIC_API_KEY"] = ""
@@ -68,17 +69,24 @@ def _schema():
 @pytest.fixture(autouse=True)
 def _clean_tables():
     from app import providers as _p
+    from app.bootstrap import bootstrap
 
     with SessionLocal() as s:
         s.execute(
             text(
                 "TRUNCATE usage_logs, allowed_providers, virtual_keys, "
-                "provider_credentials RESTART IDENTITY CASCADE"
+                "provider_credentials, users RESTART IDENTITY CASCADE"
             )
         )
         s.commit()
+        bootstrap(s)  # recreate the admin + demo user rows
     _p._db_keys.clear()  # drop stale decrypted-key cache between tests
     _p._cache.clear()
+    from app.gateway import _pg_hits
+    from app.routers.auth import _signups
+
+    _pg_hits.clear()
+    _signups.clear()
     yield
 
 
@@ -100,5 +108,23 @@ def make_key(client, admin):
         r = client.post("/api/keys", json=body, headers=admin)
         assert r.status_code == 200, r.text
         return r.json()
+
+    return _make
+
+
+@pytest.fixture()
+def signup():
+    """Create an isolated logged-in user; returns (its own TestClient, user dict)."""
+    n = {"i": 0}
+
+    def _make(email: str | None = None, password: str = "pw-abcdefgh") -> tuple:
+        n["i"] += 1
+        c = TestClient(app)
+        r = c.post(
+            "/api/auth/signup",
+            json={"email": email or f"u{n['i']}@example.com", "password": password},
+        )
+        assert r.status_code == 200, r.text
+        return c, r.json()["user"]
 
     return _make

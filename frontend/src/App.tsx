@@ -4,7 +4,8 @@ import { Dashboard } from "./pages/Dashboard";
 import { Playground } from "./pages/Playground";
 import { Requests } from "./pages/Requests";
 import { Insights } from "./pages/Insights";
-import { Admin } from "./pages/Admin";
+import { Account } from "./pages/Admin";
+import { Login } from "./pages/Login";
 
 export default function App() {
   return (
@@ -15,7 +16,9 @@ export default function App() {
         <Route path="/playground" element={<Playground />} />
         <Route path="/requests" element={<Requests />} />
         <Route path="/insights" element={<Insights />} />
-        <Route path="/admin" element={<Admin />} />
+        <Route path="/login" element={<Login />} />
+        <Route path="/account" element={<Account />} />
+        <Route path="/admin" element={<Navigate to="/account" replace />} />
         <Route path="*" element={<Navigate to="/dashboard" replace />} />
       </Routes>
     </Layout>

@@ -47,6 +47,7 @@ class KeyOut(BaseModel):
     id: int
     label: str
     key_prefix: str
+    owner_email: str | None = None  # only populated for admin
     allowed_providers: list[str]
     allow_live: bool
     default_provider: str | None

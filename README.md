@@ -5,21 +5,24 @@ send requests through the proxy, and watch a dashboard of per-user token usage a
 OpenAI · Anthropic · OpenRouter.
 
 > **Demo only — not for production.** Ships in **simulated** mode (no real provider calls, no
-> API keys, $0 cost). One admin account — no user system, no registration.
+> API keys, $0 cost).
 >
-> **Public vs admin — one shared dataset, not multi-tenant.** Every visitor sees the *same*
-> pre-populated demo data; there's no signup and nothing is scoped to "your" login. **Dashboard,
-> Requests and Insights are read-only and public** — no sign in. **Admin is the only gate**:
-> create/revoke keys, change budgets, provider config, and reset the demo dataset. Sign in with
-> `ADMIN_USERNAME` + `ADMIN_PASSWORD` (a signed `httpOnly` session cookie); the `X-Admin-Token`
-> header is a parallel credential for curl / the OpenAI SDK / CI. **Playground** sends real
-> requests through the gateway, so it's admin-only too. Public visitors cannot write anything —
-> the proxy endpoints still require a valid `vk_…` key, and no UI path hands one out.
+> **Multi-tenant.** Anyone can **sign up** (email + password, scrypt-hashed) and gets their own
+> virtual keys, Playground, and a private dashboard seeded with a small sample dataset.
+> **Logged out**, the Dashboard / Requests / Insights tabs show a shared **demo** account's data
+> (read-only). **Logged in**, they show only *your* usage. There is one privileged **admin**
+> account (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for curl / SDK / CI)
+> that sees everything and owns provider config + the demo-data reset. **Live provider calls are
+> admin-only** — every signed-up user runs simulated, so the deployment stays $0.
 >
-> **Provider keys** normally come from server env vars only. Locally / non-prod you can also set
-> `ALLOW_DB_PROVIDER_KEYS=true` and paste keys in the Admin UI — stored **AES-encrypted** in the
-> DB, shown back only as `····last4`, and always overridden by an env var for the same provider.
-> This is **hard-blocked when `ENVIRONMENT` is deployed**.
+> Abuse controls for the public $0 database: `MAX_USERS`, signups/IP/hour, and per-account caps
+> on keys, stored usage rows, and Playground requests/hour. No email verification, no password
+> reset — it's a demo.
+>
+> **Provider keys** normally come from server env vars only. Locally / non-prod an admin can set
+> `ALLOW_DB_PROVIDER_KEYS=true` and paste keys in the UI — stored **AES-encrypted** in the DB,
+> shown back only as `····last4`, always overridden by an env var for the same provider.
+> **Hard-blocked when `ENVIRONMENT` is deployed.**
 >
 > **Cost**: for **live OpenRouter** calls it's the provider's *actual* charge (`usage.cost` from
 > the response). OpenAI/Anthropic don't return a per-request cost, so those (and all simulated
@@ -77,19 +80,18 @@ docker compose up --build
 | API docs  | http://localhost:8000/docs   |
 | Adminer   | `docker compose --profile tools up` → http://localhost:8080 (server `db`, user/pass `llm`) |
 
-On first boot the backend creates the schema and starts **empty** (`SEED_DEMO_DATA=false`
-locally). Demo flow:
+On first boot the backend creates the schema (`SEED_DEMO_DATA=false` locally). Demo flow:
 
-1. **Admin** → sign in (`admin` / `dev-password` under docker-compose) → **Demo tools → Reset
-   demo dataset** — builds the shared dataset: 5 keys, ~30 days of simulated usage across all
-   three providers, and a built-in anomaly. This is the same one-click reset the public
-   deployment uses, and it's what every visitor sees — there's no per-visitor data.
-2. **Dashboard**, **Requests**, **Insights** — open in a private tab, no sign in. All three are
-   fully public: summary + charts + latency/error metrics, the per-request log, and anomaly
-   alerts with **Investigate** → ranked contributors → **View related requests**.
-3. **Playground** and the rest of **Admin** (create/revoke keys, budgets, providers) need the
-   sign-in — paste a `vk_…` key from a key you create to send a few requests, or point an OpenAI
-   SDK at `http://localhost:8000/v1`.
+1. **Dashboard / Requests / Insights** — open with no sign in. They show the shared **demo**
+   account's data: summary + charts + latency/error metrics, the per-request log, and anomaly
+   alerts with **Investigate** → ranked contributors → **View related requests**. (Empty until
+   an admin seeds it — step 3.)
+2. **Sign in → Create an account** — you land on **/account** with 3 seeded sample keys and a
+   private dashboard. Open **Playground**, paste one of *your* `vk_…` keys, send requests — they
+   show up only on *your* Dashboard/Requests/Insights, not other users' or the demo's.
+3. **Admin** (`admin` / `dev-password` under docker-compose) → **Demo tools → Reset demo
+   dataset** builds the shared logged-out dataset (5 keys, ~30 days, a built-in anomaly).
+   Admin's Dashboard shows *all* accounts; the keys table gains an Owner column.
 
 *(`Admin → Demo tools → Inject usage spike` is the smaller, older helper — it just adds a
 last-24h anomaly on top of whatever data already exists, without touching the rest.)*
@@ -174,9 +176,10 @@ The only "cost" of the free tier is a ~30–60 s cold start after 15 min idle (R
 4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy. `render.yaml`
    sets `SEED_DEMO_DATA=true`, so first boot builds the shared demo dataset automatically —
    every visitor sees it immediately, no manual step needed.
-5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. Dashboard, Requests and
-   Insights are public; sign in at `/admin` with `admin` + the generated `ADMIN_PASSWORD`
-   (Render → service → Environment) to unlock `/admin` and `/playground`.
+5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. Dashboard/Requests/
+   Insights are public (demo data); anyone can **sign up** for their own. Sign in as **admin**
+   with `admin` + the generated `ADMIN_PASSWORD` (Render → service → Environment) to reset the
+   demo data and see all accounts.
 
 **All-Render fallback:** uncomment the `databases:` block in `render.yaml`. Note Render's free
 Postgres is deleted 30 days after creation; the schema is recreated automatically but any keys
@@ -200,7 +203,13 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | `DATABASE_URL` | local compose value | Postgres. `postgres://` / `postgresql://` auto-rewritten to the psycopg3 driver. |
 | `ADMIN_TOKEN` | `dev-admin-token` | `X-Admin-Token` header credential (curl / SDK / CI). Must be overridden when `ENVIRONMENT` is deployed. |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `""` | Admin login form. Empty password ⇒ password login disabled (token still works). `ADMIN_PASSWORD` required (≥12 chars) when `ENVIRONMENT` is deployed. |
-| `SESSION_TTL_HOURS` | `168` | Admin session-cookie lifetime. |
+| `SESSION_TTL_HOURS` | `168` | Session-cookie lifetime (users + admin). |
+| `ALLOW_SIGNUP` | `true` | Public account creation. |
+| `MAX_USERS` | `300` | Signup is refused past this many real accounts (protects the free DB). |
+| `SIGNUPS_PER_IP_PER_HOUR` | `5` | In-process signup throttle per client IP. |
+| `MAX_KEYS_PER_USER` | `10` | Virtual-key cap per non-admin account. |
+| `MAX_USAGE_ROWS_PER_USER` | `4000` | The proxy stops recording once an account hits this. |
+| `PLAYGROUND_REQUESTS_PER_HOUR` | `120` | Per-account proxy rate limit (non-admin). |
 | `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing **and** session-cookie signing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | `""` | Server-side provider creds. Always win over a DB-stored key. Never shown in the UI. |
@@ -216,26 +225,29 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 
 ## API
 
-Admin auth = a valid session cookie (from `POST /api/auth/login`) **or** the `X-Admin-Token`
-header. "admin" below means either.
+Auth = a valid session cookie (`POST /api/auth/{signup,login}`) **or** the `X-Admin-Token` header
+(→ the admin user). "user" below = any signed-in account; "admin" = the privileged one. Read
+endpoints are **viewer-scoped**: logged out → the demo account; user → their own; admin → all.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
 | GET | `/healthz` | — | health / warmup (`{version, live_enabled, db_keys_enabled}`) |
 | GET | `/api/models` | — | configured pricing table (per provider/model) |
-| POST `\|` POST `\|` GET | `/api/auth/login` `\|` `/logout` `\|` `/me` | — | `{username,password}` → sets `httpOnly` session cookie / clears it / `{authenticated, username}` |
+| POST | `/api/auth/signup` `\|` `/login` | — | `{email, password}` → sets `httpOnly` session cookie, `{authenticated, user:{id,email,is_admin}}` |
+| POST `\|` GET | `/api/auth/logout` `\|` `/me` | — | clear the cookie / current principal |
+| POST `\|` DELETE `\|` DELETE | `/api/account/sample` `\|` `/api/account/data` `\|` `/api/account` | user | regenerate my sample data / wipe my keys+usage / delete my account |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured, valid, source, last4, checked_at}]` (`?refresh=true` to re-check) |
 | PUT `\|` DELETE | `/api/providers/{provider}/key` | admin | set / clear a DB-stored (encrypted) provider key. `404` unless `ALLOW_DB_PROVIDER_KEYS`; `409` if a server env var is set for that provider |
-| POST | `/api/keys` | admin | `{label, allowed_providers[], allow_live?, default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
-| GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | admin | list (+ `spend_period`) / patch any of the above (`clear_budget`) / revoke |
-| GET | `/api/requests` | — *(public)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
-| GET | `/api/insights/alerts` `\|` `/alerts/{id}` | — *(public)* | anomaly alerts / investigation (contributors + analysis + `related_query`) |
+| POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(admin only), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
+| GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | user | list *your* keys (admin: all, + `owner_email`) / patch / revoke |
+| GET | `/api/requests` | — *(scoped)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
+| GET | `/api/insights/alerts` `\|` `/alerts/{id}` | — *(scoped)* | anomaly alerts / investigation (contributors + analysis + `related_query`) |
 | POST | `/api/insights/demo-spike` | admin | add a last-24h anomaly on top of existing data (small demo helper) |
 | POST | `/api/demo/reset` | admin | wipe **all** keys + usage and rebuild the deterministic shared demo dataset (5 keys, ~30 days, one built-in spike) — this is what every public visitor sees |
 | **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget, `403` provider not on key. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + per-provider `mode` (`simulated`/`live`) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
-| GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | — *(public)* | dashboard aggregates (`start,end,provider,model,key_id`); `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
+| GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | — *(scoped)* | dashboard aggregates (`start,end,provider,model,key_id`); `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
 
 Public endpoints are read-only demo data — `LOG_BODIES=false` on the public deploy keeps prompt/
 response previews out of `/api/requests` regardless. Every other write (auth aside — login just
@@ -246,12 +258,17 @@ admin can mint — so a public visitor has no path to modify the shared dataset.
 
 ## Data model
 
-- **virtual_keys** — `id, label, key_hash, key_prefix, allow_live, default_provider,
-  monthly_budget_usd, budget_period, budget_start, budget_end, created_at,
+- **users** — `id, email (unique), password_hash (scrypt), is_admin, is_demo, created_at`. The
+  admin row is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot; the demo row owns
+  the shared logged-out dataset and can't log in. Sessions are a stateless HMAC-signed cookie
+  carrying the user id.
+- **virtual_keys** — `id, user_id → users, label, key_hash, key_prefix, allow_live,
+  default_provider, monthly_budget_usd, budget_period, budget_start, budget_end, created_at,
   last_used_at, revoked_at`. Only the HMAC hash and an 11-char prefix are stored; the raw key is
   shown once. Per-key **budget**: `$X` per `1 day` / `1 week` / `1 month` (rolling), or a
-  `custom` fixed `[budget_start, budget_end]` range → `402` when spent (outside a custom range
-  the cap doesn't apply). Keys don't expire — revoke them explicitly.
+  `custom` fixed `[budget_start, budget_end]` range → `402` when spent. Keys don't expire —
+  revoke them explicitly. (`user_id` is added by a small boot-time migration on pre-multi-tenant
+  databases and backfilled to the demo account.)
 - **allowed_providers** — `(virtual_key_id, provider)`, unique. The per-key provider ACL enforced
   on every proxied request.
 - **usage_logs** — `id, key_id, request_id, provider, model, prompt_tokens, completion_tokens,
