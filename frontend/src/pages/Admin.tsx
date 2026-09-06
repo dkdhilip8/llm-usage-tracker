@@ -253,6 +253,16 @@ function CreateKeyForm({
     });
   }, [canPick]);
 
+  // a single-provider key defaults to that provider (so callers can send bare
+  // model names); a multi-provider key leaves it unset unless chosen; a stale
+  // choice is cleared.
+  useEffect(() => {
+    const p = allowed.filter(canPick);
+    setDefaultProvider((cur) =>
+      p.length === 1 ? p[0] : cur && !p.includes(cur) ? "" : cur,
+    );
+  }, [allowed, canPick]);
+
   function toggle(p: string) {
     if (!canPick(p)) return;
     setAllowed((a) => (a.includes(p) ? a.filter((x) => x !== p) : [...a, p]));
@@ -334,13 +344,17 @@ function CreateKeyForm({
             value={defaultProvider}
             onChange={(e) => setDefaultProvider(e.target.value)}
           >
-            <option value="">none (require provider/ prefix)</option>
+            <option value="">none — callers must send provider/model</option>
             {picked.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
             ))}
           </select>
+          <span className="mt-1 block text-[10px] font-normal text-fg-subtle">
+            Fills in the provider for a bare model name on <code>/v1/chat/completions</code>{" "}
+            (e.g. <code>gpt-4o</code>). Callers can prefix <code>provider/model</code> to override.
+          </span>
         </label>
 
         <div className="grid grid-cols-2 gap-2">
