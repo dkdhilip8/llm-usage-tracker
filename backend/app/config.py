@@ -63,6 +63,7 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     OPENROUTER_API_KEY: str = ""
+    GEMINI_API_KEY: str = ""  # Google AI Studio key; used via the OpenAI-compatible endpoint
 
     # Master switch for live upstream calls. Default off keeps the public demo $0.
     # Even when on, a request also needs key.allow_live + a configured & valid provider.
@@ -83,7 +84,7 @@ class Settings(BaseSettings):
     # deploy so a fresh database self-populates; false locally and in tests.
     SEED_DEMO_DATA: bool = False
 
-    VERSION: str = "0.8.0"
+    VERSION: str = "0.8.1"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":
@@ -128,6 +129,7 @@ class Settings(BaseSettings):
             "openai": self.OPENAI_API_KEY,
             "anthropic": self.ANTHROPIC_API_KEY,
             "openrouter": self.OPENROUTER_API_KEY,
+            "gemini": self.GEMINI_API_KEY,
         }.get(provider, "")
 
 

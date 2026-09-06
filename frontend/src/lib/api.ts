@@ -19,7 +19,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 
 // ---- types ----
-export const PROVIDERS = ["openai", "anthropic", "openrouter"] as const;
+export const PROVIDERS = ["openai", "anthropic", "openrouter", "gemini"] as const;
 export type Provider = (typeof PROVIDERS)[number];
 
 export interface ModelInfo {

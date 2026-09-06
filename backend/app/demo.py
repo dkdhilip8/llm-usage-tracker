@@ -23,18 +23,20 @@ _SMALL, _MID, _LARGE = "small", "mid", "large"
 KeySpec = tuple[str, list[str], float | None, int, list[tuple[str, str, float, str]]]
 
 _DEMO_KEYS: list[KeySpec] = [
-    ("Engineering", ["openai", "anthropic", "openrouter"], 50.0, 14, [
-        ("openai", "gpt-4o-mini", 0.40, _SMALL),
-        ("openai", "gpt-4o", 0.25, _LARGE),
-        ("openai", "o4-mini", 0.15, _MID),
-        ("anthropic", "claude-3-5-sonnet", 0.10, _LARGE),
+    ("Engineering", ["openai", "anthropic", "openrouter", "gemini"], 50.0, 14, [
+        ("openai", "gpt-4o-mini", 0.34, _SMALL),
+        ("openai", "gpt-4o", 0.22, _LARGE),
+        ("openai", "o4-mini", 0.13, _MID),
+        ("anthropic", "claude-3-5-sonnet", 0.09, _LARGE),
         ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.10, _MID),
+        ("gemini", "gemini-2.5-flash", 0.12, _MID),
     ]),
-    ("Data Science", ["openai", "anthropic"], 30.0, 9, [
-        ("openai", "gpt-4o", 0.30, _LARGE),
-        ("anthropic", "claude-3-5-sonnet", 0.30, _LARGE),
-        ("anthropic", "claude-3-7-sonnet", 0.20, _LARGE),
-        ("openai", "gpt-4o-mini", 0.20, _SMALL),
+    ("Data Science", ["openai", "anthropic", "gemini"], 30.0, 9, [
+        ("openai", "gpt-4o", 0.28, _LARGE),
+        ("anthropic", "claude-3-5-sonnet", 0.26, _LARGE),
+        ("anthropic", "claude-3-7-sonnet", 0.18, _LARGE),
+        ("openai", "gpt-4o-mini", 0.16, _SMALL),
+        ("gemini", "gemini-2.5-pro", 0.12, _LARGE),
     ]),
     ("Support Bot", ["openrouter"], 10.0, 20, [
         ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.60, _MID),
@@ -46,17 +48,19 @@ _DEMO_KEYS: list[KeySpec] = [
         ("anthropic", "claude-3-5-sonnet", 0.20, _LARGE),
         ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.30, _MID),
     ]),
-    ("Mobile App", ["openai"], 20.0, 11, [
-        ("openai", "gpt-4o-mini", 0.70, _SMALL),
-        ("openai", "o4-mini", 0.30, _MID),
+    ("Mobile App", ["openai", "gemini"], 20.0, 11, [
+        ("openai", "gpt-4o-mini", 0.45, _SMALL),
+        ("openai", "o4-mini", 0.20, _MID),
+        ("gemini", "gemini-2.5-flash-lite", 0.35, _SMALL),
     ]),
 ]
 
 _SAMPLE_KEYS: list[KeySpec] = [
-    ("My app", ["openai", "openrouter"], None, 9, [
-        ("openai", "gpt-4o-mini", 0.55, _SMALL),
-        ("openai", "gpt-4o", 0.25, _LARGE),
-        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.20, _MID),
+    ("My app", ["openai", "openrouter", "gemini"], None, 9, [
+        ("openai", "gpt-4o-mini", 0.45, _SMALL),
+        ("openai", "gpt-4o", 0.20, _LARGE),
+        ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.15, _MID),
+        ("gemini", "gemini-2.5-flash", 0.20, _MID),
     ]),
     ("Batch jobs", ["openrouter"], 5.0, 6, [
         ("openrouter", "meta-llama/llama-3.3-70b-instruct", 0.7, _MID),

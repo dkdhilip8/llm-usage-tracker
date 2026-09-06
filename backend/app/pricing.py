@@ -19,11 +19,15 @@ CONFIGURED_PRICING: dict[tuple[str, str], Pricing] = {
     ("openrouter", "google/gemma-4-31b-it:free"): {"input": 0.0, "output": 0.0},
     ("openrouter", "google/gemini-2.5-flash-lite"): {"input": 0.10, "output": 0.40},
     ("openrouter", "deepseek/deepseek-chat-v3.1"): {"input": 0.55, "output": 1.65},
+    # Google Gemini via its OpenAI-compatible endpoint (addressed as "gemini/<model>").
+    ("gemini", "gemini-2.5-flash"): {"input": 0.30, "output": 2.50},
+    ("gemini", "gemini-2.5-flash-lite"): {"input": 0.10, "output": 0.40},
+    ("gemini", "gemini-2.5-pro"): {"input": 1.25, "output": 10.00},
 }
 
 FALLBACK_PRICING: Pricing = {"input": 1.00, "output": 3.00}
 
-PROVIDERS = ("openai", "anthropic", "openrouter")
+PROVIDERS = ("openai", "anthropic", "openrouter", "gemini")
 
 
 def price_for(provider: str, model: str) -> Pricing:

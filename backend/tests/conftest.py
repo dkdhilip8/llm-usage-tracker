@@ -22,6 +22,7 @@ os.environ["SIGNUPS_PER_IP_PER_HOUR"] = "1000"  # a throttle test lowers this it
 os.environ["OPENAI_API_KEY"] = ""
 os.environ["ANTHROPIC_API_KEY"] = ""
 os.environ["OPENROUTER_API_KEY"] = ""
+os.environ["GEMINI_API_KEY"] = ""
 
 _TEST_DB = os.environ.get(
     "TEST_DATABASE_URL",

@@ -9,6 +9,7 @@ const COLORS: Record<string, string> = {
   openai: "#4f46e5",
   anthropic: "#0ea5e9",
   openrouter: "#f97316",
+  gemini: "#a855f7",
 };
 
 export function UsageByProviderChart({ data }: { data: ByModelRow[] }) {

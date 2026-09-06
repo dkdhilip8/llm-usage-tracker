@@ -127,7 +127,7 @@ def chat_completions(
             settings.ENABLE_LIVE
             and vk.allow_live
             and live_key is not None
-            and provider in ("openai", "openrouter")
+            and provider in ("openai", "openrouter", "gemini")
         )
         if go_live:
             try:

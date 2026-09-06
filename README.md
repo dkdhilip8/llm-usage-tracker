@@ -2,7 +2,7 @@
 
 An **LLM gateway** demo: issue per-user virtual API keys with per-provider access control,
 send requests through the proxy, and watch a dashboard of per-user token usage and cost.
-OpenAI · Anthropic · OpenRouter.
+OpenAI · Anthropic · OpenRouter · Google Gemini.
 
 > **Demo only — not for production.** **Simulated** by default (no real provider calls, no host
 > API keys, $0 to run). Real calls happen only when a user attaches **their own** provider key,
@@ -16,7 +16,7 @@ OpenAI · Anthropic · OpenRouter.
 > everything and owns provider config + the demo-data reset.
 >
 > **Per-account live mode.** On the Account page a signed-in user pastes their **own**
-> OpenAI/Anthropic/OpenRouter key (encrypted at rest, shown back only as `····last4`) and sets a
+> OpenAI/Anthropic/OpenRouter/Gemini key (encrypted at rest, shown back only as `····last4`) and sets a
 > monthly spend cap. Their virtual keys can then be flagged **allow live** and make real upstream
 > calls billed to that key, blocked once the month's live spend hits the cap (default
 > `LIVE_CAP_DEFAULT_USD`, hard ceiling `LIVE_CAP_MAX_USD` = $10). They copy the raw `vk_…` strings
@@ -34,7 +34,7 @@ OpenAI · Anthropic · OpenRouter.
 > **Hard-blocked when `ENVIRONMENT` is deployed.**
 >
 > **Cost**: for **live OpenRouter** calls it's the provider's *actual* charge (`usage.cost` from
-> the response). OpenAI/Anthropic don't return a per-request cost, so those (and all simulated
+> the response). OpenAI/Anthropic/Gemini don't return a per-request cost, so those (and all simulated
 > calls) are **estimated** as tokens × a hand-maintained price table. Each row records which:
 > `cost_source` = `provider` or `configured`. The dashboard shows the actual/estimated split.
 >
@@ -223,7 +223,7 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | `LIVE_CAP_DEFAULT_USD` / `LIVE_CAP_MAX_USD` | `5` / `10` | Default / hard ceiling for an account's monthly live-spend cap. |
 | `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing **and** session-cookie signing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
-| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | `""` | Server-side provider creds. Always win over a DB-stored key. Never shown in the UI. |
+| `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` | `""` | Server-side provider creds. Always win over a DB-stored key. Never shown in the UI. Gemini uses Google's OpenAI-compatible endpoint. |
 | `ALLOW_DB_PROVIDER_KEYS` | `false` | Let the Admin UI store provider keys (AES-encrypted) in the DB. Convenience for local / non-prod — **hard-blocked when `ENVIRONMENT` is deployed**. |
 | `ENCRYPTION_KEY` | `""` | Fernet key (urlsafe-base64, 32 bytes) for that encryption. Empty ⇒ derived from `SECRET_KEY`. |
 | `ENABLE_LIVE` | `false` | Master switch for real upstream calls. `true` on the deploy — but a request still needs its virtual key flagged `allow_live` **and** the owning account to have attached its own provider key, and it stops at that account's monthly cap. |
@@ -303,7 +303,7 @@ and `last4` when a DB key is in play locally).
 
 **The demo dataset is shared, not per-user.** `POST /api/demo/reset` (`app/demo.py`) deletes every
 row and deterministically rebuilds 5 keys (Engineering, Data Science, Support Bot, Content Team,
-Mobile App) with ~30 days of simulated traffic across all three providers, a weekday/weekend
+Mobile App) with ~30 days of simulated traffic across all four providers, a weekday/weekend
 pattern, a ~1.5% error rate, and a built-in last-24h cost spike on Engineering so Insights always
 has something to investigate. The demo keys' `key_hash` is random (`secrets.token_hex(32)`) and no
 raw key is ever produced — they exist only to own usage rows, not to authenticate anything.

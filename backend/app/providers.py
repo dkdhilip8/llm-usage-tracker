@@ -15,24 +15,31 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 
-SUPPORTED = ("openai", "anthropic", "openrouter")
+SUPPORTED = ("openai", "anthropic", "openrouter", "gemini")
 
 ENV_VARS = {
     "openai": "OPENAI_API_KEY",
     "anthropic": "ANTHROPIC_API_KEY",
     "openrouter": "OPENROUTER_API_KEY",
+    "gemini": "GEMINI_API_KEY",
 }
+
+# Gemini is reached through Google's OpenAI-compatible surface, so it shares the
+# openai/openrouter request+response shape (Bearer auth, chat/completions, SSE).
+_GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/openai"
 
 _LIVENESS_URLS = {
     "openai": "https://api.openai.com/v1/models",
     "anthropic": "https://api.anthropic.com/v1/models",
     "openrouter": "https://openrouter.ai/api/v1/key",
+    "gemini": f"{_GEMINI_BASE}/models",
 }
 
 _CHAT_URLS = {
     "openai": "https://api.openai.com/v1/chat/completions",
     "anthropic": "https://api.anthropic.com/v1/messages",
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
+    "gemini": f"{_GEMINI_BASE}/chat/completions",
 }
 
 # provider -> (valid: bool, checked_at: epoch seconds)
@@ -210,9 +217,9 @@ def call_provider(
 
     `api_key` overrides the resolved key (used for an account's own key).
     actual_cost is the real amount the provider charged when it reports one
-    (OpenRouter does, via `usage.cost`); it is None for OpenAI/Anthropic, whose
-    APIs return token counts only — the caller then estimates from the price table.
-    Raises on transport/HTTP failure."""
+    (OpenRouter does, via `usage.cost`); it is None for OpenAI/Anthropic/Gemini,
+    whose APIs return token counts only — the caller then estimates from the price
+    table. Raises on transport/HTTP failure."""
     headers = _auth_headers(provider, api_key)
 
     if provider == "anthropic":
@@ -237,7 +244,7 @@ def call_provider(
             None,  # Anthropic returns no per-request cost
         )
 
-    # openai + openrouter share the OpenAI chat-completions shape
+    # openai, openrouter and gemini share the OpenAI chat-completions shape
     body: dict = {"model": model, "messages": [{"role": "user", "content": prompt}]}
     if provider == "openrouter":
         headers = {
@@ -264,7 +271,7 @@ def call_provider(
 def stream_openai_compatible(
     provider: str, model: str, prompt: str, api_key: str | None = None
 ) -> Iterator[tuple[str, object]]:
-    """True SSE passthrough for OpenAI-shaped providers (openai, openrouter).
+    """True SSE passthrough for OpenAI-shaped providers (openai, openrouter, gemini).
 
     Yields ("delta", text) for each content delta, then a final
     ("done", {"prompt_tokens", "completion_tokens", "cost"}). Raises on transport
@@ -282,7 +289,7 @@ def stream_openai_compatible(
             "X-Title": "LLM Usage Tracker",
         }
         body["usage"] = {"include": True}
-    else:  # openai
+    else:  # openai, gemini
         body["stream_options"] = {"include_usage": True}
 
     pt = ct = 0
