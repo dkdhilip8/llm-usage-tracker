@@ -192,47 +192,6 @@ export interface ChatResult {
   latency_ms: number;
 }
 
-export interface InsightAlert {
-  id: string;
-  type: "cost_spike" | "token_spike";
-  severity: "warning" | "critical";
-  title: string;
-  detail: string;
-  metric: "cost" | "tokens";
-  current: number;
-  baseline: number;
-  pct_change: number;
-  scope: {
-    kind: "key" | "model" | "global";
-    key_id?: number;
-    key_label?: string;
-    provider?: string;
-    model?: string;
-  };
-}
-
-export interface Contributor {
-  label: string;
-  kind: "key" | "model" | "volume";
-  pct: number;
-  detail: string;
-}
-
-export interface Investigation {
-  alert_id: string;
-  metric: "cost" | "tokens";
-  headline: {
-    metric: "cost" | "tokens";
-    baseline: number;
-    current: number;
-    pct_change: number;
-  };
-  contributors: Contributor[];
-  summary: string;
-  related_query: Record<string, string | number>;
-  analyzed: string[];
-}
-
 export const api = {
   health: () =>
     req<{
@@ -277,16 +236,7 @@ export const api = {
   clearAccountProviderKey: (provider: string) =>
     req<{ provider: string }>(`/api/account/providers/${provider}/key`, { method: "DELETE" }),
 
-  // public, read-only
-  insights: () => req<{ alerts: InsightAlert[] }>("/api/insights/alerts"),
-  investigate: (id: string) =>
-    req<Investigation>(`/api/insights/alerts/${encodeURIComponent(id)}`),
-
-  // admin-only demo-data controls (session cookie carries auth)
-  injectDemoSpike: () =>
-    req<{ inserted: number; key_label: string }>("/api/insights/demo-spike", {
-      method: "POST",
-    }),
+  // admin-only demo-data control (session cookie carries auth)
   resetDemo: () =>
     req<{ keys: number; usage_rows: number; days: number }>("/api/demo/reset", {
       method: "POST",

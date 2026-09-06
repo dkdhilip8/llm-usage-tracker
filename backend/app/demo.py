@@ -128,7 +128,7 @@ def _wipe_user(db: Session, user_id: int) -> None:
     db.flush()
 
 
-def _generate(db: Session, user_id: int, specs: list[KeySpec], *, days: int, spike: int, seed: int) -> int:
+def _generate(db: Session, user_id: int, specs: list[KeySpec], *, days: int, seed: int) -> int:
     rng = random.Random(seed)
     now = datetime.now(UTC)
     rows: list[UsageLog] = []
@@ -152,17 +152,6 @@ def _generate(db: Session, user_id: int, specs: list[KeySpec], *, days: int, spi
                     ts = now - timedelta(minutes=rng.uniform(1, 90))
                 rows.append(_row(rng, vk.id, provider, model, tier, ts))
 
-    # a deliberate last-~20h cost spike on the first key -> Insights fires
-    eng = keys[0][0]
-    for _ in range(spike):
-        ts = now - timedelta(minutes=rng.uniform(15, 1200))
-        pt, ct = rng.randint(1500, 3000), rng.randint(1200, 2200)
-        rows.append(_row(rng, eng.id, "openai", "gpt-4o", _LARGE, ts))
-        rows[-1].prompt_tokens, rows[-1].completion_tokens = pt, ct
-        rows[-1].total_tokens = pt + ct
-        rows[-1].cost = estimate_cost("openai", "gpt-4o", pt, ct)
-        rows[-1].status = "success"
-
     db.add_all(rows)
     return len(rows)
 
@@ -172,7 +161,7 @@ def reset_demo_data(db: Session) -> dict:
     account — never touches real users' data."""
     uid = demo_user_id(db)
     _wipe_user(db, uid)
-    inserted = _generate(db, uid, _DEMO_KEYS, days=30, spike=32, seed=SEED)
+    inserted = _generate(db, uid, _DEMO_KEYS, days=30, seed=SEED)
     db.commit()
     return {"keys": len(_DEMO_KEYS), "usage_rows": inserted, "days": 30}
 
@@ -181,7 +170,7 @@ def seed_user_sample(db: Session, user_id: int) -> dict:
     """(Re)build a small starter dataset for one real user."""
     _wipe_user(db, user_id)
     inserted = _generate(
-        db, user_id, _SAMPLE_KEYS, days=12, spike=14, seed=SEED ^ (user_id * 2654435761)
+        db, user_id, _SAMPLE_KEYS, days=12, seed=SEED ^ (user_id * 2654435761)
     )
     db.commit()
     return {"keys": len(_SAMPLE_KEYS), "usage_rows": inserted, "days": 12}

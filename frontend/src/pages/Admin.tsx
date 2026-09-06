@@ -457,57 +457,43 @@ function CreateKeyForm({
 
 function DemoTools({ onChange }: { onChange: () => void }) {
   const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState<null | "spike" | "reset">(null);
+  const [busy, setBusy] = useState(false);
 
-  function run(kind: "spike" | "reset") {
-    setBusy(kind);
+  function reset() {
+    setBusy(true);
     setMsg(null);
-    const call =
-      kind === "spike"
-        ? api.injectDemoSpike().then((r) => `Inserted ${r.inserted} rows (${r.key_label}). Open Insights →`)
-        : api.resetDemo().then((r) => `Rebuilt: ${r.keys} keys · ${r.usage_rows} rows · ${r.days} days.`);
-    call
-      .then((m) => {
-        setMsg(m);
+    api
+      .resetDemo()
+      .then((r) => {
+        setMsg(`Rebuilt: ${r.keys} keys · ${r.usage_rows} rows · ${r.days} days.`);
         onChange();
       })
       .catch((e: Error) => setMsg(e.message))
-      .finally(() => setBusy(null));
+      .finally(() => setBusy(false));
   }
 
   return (
     <Card title="Demo tools">
       <div className="space-y-2">
-        <div className="flex flex-wrap gap-2">
-          <button
-            onClick={() => run("spike")}
-            disabled={busy !== null}
-            className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            {busy === "spike" ? "Injecting…" : "Inject usage spike"}
-          </button>
-          <button
-            onClick={() => {
-              if (
-                window.confirm(
-                  "Reset the demo dataset? This deletes ALL keys and usage, then rebuilds " +
-                    "the shared ~30-day demo data.",
-                )
+        <button
+          onClick={() => {
+            if (
+              window.confirm(
+                "Reset the demo dataset? This deletes ALL keys and usage, then rebuilds " +
+                  "the shared ~30-day demo data.",
               )
-                run("reset");
-            }}
-            disabled={busy !== null}
-            className="rounded-md border border-line px-4 py-2 text-sm font-medium text-fg-muted hover:bg-fill disabled:opacity-50"
-          >
-            {busy === "reset" ? "Rebuilding…" : "Reset demo dataset"}
-          </button>
-        </div>
+            )
+              reset();
+          }}
+          disabled={busy}
+          className="rounded-md border border-line px-4 py-2 text-sm font-medium text-fg-muted hover:bg-fill disabled:opacity-50"
+        >
+          {busy ? "Rebuilding…" : "Reset demo dataset"}
+        </button>
         {msg && <div className="text-xs text-fg-muted">{msg}</div>}
         <p className="text-[11px] text-fg-subtle">
-          <strong>Spike</strong> adds a last-24h anomaly on a demo key so Insights has something to
-          show. <strong>Reset</strong> wipes everything and regenerates the deterministic shared
-          dataset (5 keys, ~30 days of simulated usage, one built-in spike) — this is the data every
-          public visitor sees.
+          Wipes everything and regenerates the deterministic shared dataset (5 keys, ~30 days
+          of simulated usage) — this is the data every public visitor sees.
         </p>
       </div>
     </Card>

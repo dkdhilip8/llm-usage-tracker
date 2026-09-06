@@ -80,11 +80,11 @@ class Settings(BaseSettings):
     SIMULATE_LATENCY_SLEEP: bool = True
 
     # On boot, if usage_logs is empty, generate the shared demo dataset (keys +
-    # ~30 days of simulated usage + a recent anomaly). Set true on the public
-    # deploy so a fresh database self-populates; false locally and in tests.
+    # ~30 days of simulated usage). Set true on the public deploy so a fresh
+    # database self-populates; false locally and in tests.
     SEED_DEMO_DATA: bool = False
 
-    VERSION: str = "0.8.1"
+    VERSION: str = "0.8.2"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":

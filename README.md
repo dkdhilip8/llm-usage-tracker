@@ -10,7 +10,7 @@ OpenAI · Anthropic · OpenRouter · Google Gemini.
 >
 > **Multi-tenant.** Anyone can **sign up** (email + password, scrypt-hashed) and gets their own
 > virtual keys, Playground, and a private dashboard seeded with a small sample dataset.
-> **Logged out**, the Dashboard / Requests / Insights tabs show a shared **demo** account's data
+> **Logged out**, the Dashboard / Requests tabs show a shared **demo** account's data
 > (read-only). **Logged in**, they show only *your* usage. One privileged **admin** account
 > (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for curl / SDK / CI) sees
 > everything and owns provider config + the demo-data reset.
@@ -44,7 +44,7 @@ OpenAI · Anthropic · OpenRouter · Google Gemini.
 > public deployment keeps `ENABLE_LIVE=false`.
 
 ```
-Browser → React (Dashboard · Requests · Insights — public)  +  (Playground · Admin — token)
+Browser → React (Dashboard · Requests — public)  +  (Playground · Account — signed in)
         → FastAPI gateway
             → virtual-key auth  →  per-key provider ACL  →  per-key monthly budget
             → simulator (default)  |  real provider call (gated)   [JSON or SSE stream]
@@ -91,19 +91,15 @@ docker compose up --build
 
 On first boot the backend creates the schema (`SEED_DEMO_DATA=false` locally). Demo flow:
 
-1. **Dashboard / Requests / Insights** — open with no sign in. They show the shared **demo**
-   account's data: summary + charts + latency/error metrics, the per-request log, and anomaly
-   alerts with **Investigate** → ranked contributors → **View related requests**. (Empty until
-   an admin seeds it — step 3.)
+1. **Dashboard / Requests** — open with no sign in. They show the shared **demo** account's
+   data: summary + charts + latency/error metrics and the per-request log. (Empty until an
+   admin seeds it — step 3.)
 2. **Sign in → Create an account** — you land on **/account** with 3 seeded sample keys and a
    private dashboard. Open **Playground**, paste one of *your* `vk_…` keys, send requests — they
-   show up only on *your* Dashboard/Requests/Insights, not other users' or the demo's.
+   show up only on *your* Dashboard/Requests, not other users' or the demo's.
 3. **Admin** (`admin` / `dev-password` under docker-compose) → **Demo tools → Reset demo
-   dataset** builds the shared logged-out dataset (5 keys, ~30 days, a built-in anomaly).
+   dataset** builds the shared logged-out dataset (5 keys, ~30 days of simulated usage).
    Admin's Dashboard shows *all* accounts; the keys table gains an Owner column.
-
-*(`Admin → Demo tools → Inject usage spike` is the smaller, older helper — it just adds a
-last-24h anomaly on top of whatever data already exists, without touching the rest.)*
 
 Reset everything (wipes the DB):
 
@@ -133,7 +129,6 @@ curl -s $BASE/healthz
 # public reads — no token
 curl -s $BASE/api/usage/summary
 curl -s $BASE/api/requests
-curl -s $BASE/api/insights/alerts
 # admin mutation without a token -> 403
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE/api/demo/reset
 # provider config status (admin)
@@ -185,8 +180,8 @@ The only "cost" of the free tier is a ~30–60 s cold start after 15 min idle (R
 4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy. `render.yaml`
    sets `SEED_DEMO_DATA=true`, so first boot builds the shared demo dataset automatically —
    every visitor sees it immediately, no manual step needed.
-5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. Dashboard/Requests/
-   Insights are public (demo data); anyone can **sign up** for their own. Sign in as **admin**
+5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. Dashboard and
+   Requests are public (demo data); anyone can **sign up** for their own. Sign in as **admin**
    with `admin` + the generated `ADMIN_PASSWORD` (Render → service → Environment) to reset the
    demo data and see all accounts.
 
@@ -254,9 +249,7 @@ endpoints are **viewer-scoped**: logged out → the demo account; user → their
 | POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(needs an attached provider key), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
 | GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | user | list *your* keys (admin: all, + `owner_email`) / patch / revoke |
 | GET | `/api/requests` | — *(scoped)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
-| GET | `/api/insights/alerts` `\|` `/alerts/{id}` | — *(scoped)* | anomaly alerts / investigation (contributors + analysis + `related_query`) |
-| POST | `/api/insights/demo-spike` | admin | add a last-24h anomaly on top of existing data (small demo helper) |
-| POST | `/api/demo/reset` | admin | wipe **all** keys + usage and rebuild the deterministic shared demo dataset (5 keys, ~30 days, one built-in spike) — this is what every public visitor sees |
+| POST | `/api/demo/reset` | admin | wipe **all** keys + usage and rebuild the deterministic shared demo dataset (5 keys, ~30 days) — this is what every public visitor sees |
 | **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget, `403` provider not on key. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + per-provider `mode` (`simulated`/`live`) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
@@ -304,16 +297,15 @@ and `last4` when a DB key is in play locally).
 **The demo dataset is shared, not per-user.** `POST /api/demo/reset` (`app/demo.py`) deletes every
 row and deterministically rebuilds 5 keys (Engineering, Data Science, Support Bot, Content Team,
 Mobile App) with ~30 days of simulated traffic across all four providers, a weekday/weekend
-pattern, a ~1.5% error rate, and a built-in last-24h cost spike on Engineering so Insights always
-has something to investigate. The demo keys' `key_hash` is random (`secrets.token_hex(32)`) and no
-raw key is ever produced — they exist only to own usage rows, not to authenticate anything.
+pattern, and a ~1.5% error rate. The demo keys' `key_hash` is random (`secrets.token_hex(32)`) and
+no raw key is ever produced — they exist only to own usage rows, not to authenticate anything.
 
 ---
 
 ## Future improvements
 
-Per-key rate limits (RPM/TPM) · per-model budgets · webhook/Slack alerts + scheduled anomaly detection ·
-LLM-written insight narratives · Prometheus `/metrics` · pricing catalog auto-synced from
+Per-key rate limits (RPM/TPM) · per-model budgets · webhook/Slack alerts · usage-anomaly
+detection · Prometheus `/metrics` · pricing catalog auto-synced from
 OpenRouter `/api/v1/models` · exact-match response cache · provider fallback on live error ·
 Alembic migrations + backups · Redis for shared rate-limit / budget counters · SSO / org
 hierarchy · OpenTelemetry traces.

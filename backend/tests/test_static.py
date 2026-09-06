@@ -34,7 +34,7 @@ def test_root_serves_index(spa):
 
 def test_client_routes_fall_back_to_index(spa):
     client, _ = spa
-    for path in ("/dashboard", "/insights", "/requests", "/admin", "/a/deep/route"):
+    for path in ("/dashboard", "/account", "/requests", "/admin", "/a/deep/route"):
         r = client.get(path)
         assert r.status_code == 200, path
         assert "SPA-SHELL" in r.text, path

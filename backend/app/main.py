@@ -10,7 +10,7 @@ from starlette.types import Scope
 from app import providers
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.routers import account, auth, demo, insights, keys, openai_compat, proxy, usage
+from app.routers import account, auth, demo, keys, openai_compat, proxy, usage
 from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
@@ -21,7 +21,7 @@ class SPAStaticFiles(StaticFiles):
     """Serve the built SPA. Real files are resolved by StaticFiles, whose
     lookup enforces path containment (traversal attempts resolve outside the
     directory and 404). Any other unmatched path returns index.html so
-    client-side routes (/dashboard, /insights, ...) survive a refresh."""
+    client-side routes (/dashboard, /requests, ...) survive a refresh."""
 
     async def get_response(self, path: str, scope: Scope):
         try:
@@ -81,7 +81,6 @@ app.include_router(proxy.router)
 app.include_router(openai_compat.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)
-app.include_router(insights.router)
 app.include_router(demo.router)
 app.include_router(usage.router)
 

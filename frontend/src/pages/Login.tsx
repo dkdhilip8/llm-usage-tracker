@@ -35,7 +35,7 @@ export function Login() {
         <p className="mb-3 text-sm text-fg-muted">
           {mode === "signup"
             ? "You get your own virtual keys, Playground, and a private dashboard with a sample dataset to start from."
-            : "The Dashboard, Requests and Insights tabs are open to everyone (they show demo data). Sign in for your own."}
+            : "The Dashboard and Requests tabs are open to everyone (they show demo data). Sign in for your own."}
         </p>
         <form onSubmit={submit} className="space-y-3">
           <label className="block text-xs font-medium text-fg-muted">

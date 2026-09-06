@@ -3,7 +3,6 @@ import { Layout } from "./components/Layout";
 import { Dashboard } from "./pages/Dashboard";
 import { Playground } from "./pages/Playground";
 import { Requests } from "./pages/Requests";
-import { Insights } from "./pages/Insights";
 import { Account } from "./pages/Admin";
 import { Login } from "./pages/Login";
 
@@ -15,7 +14,6 @@ export default function App() {
         <Route path="/dashboard" element={<Dashboard />} />
         <Route path="/playground" element={<Playground />} />
         <Route path="/requests" element={<Requests />} />
-        <Route path="/insights" element={<Insights />} />
         <Route path="/login" element={<Login />} />
         <Route path="/account" element={<Account />} />
         <Route path="/admin" element={<Navigate to="/account" replace />} />

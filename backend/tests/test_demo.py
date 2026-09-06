@@ -13,16 +13,13 @@ def test_demo_reset_builds_shared_dataset(client, admin):
     assert body["usage_rows"] > 200
     assert body["days"] == 30
 
-    # every public visitor now sees a populated dashboard / log / insights
+    # every public visitor now sees a populated dashboard / log
     summary = client.get("/api/usage/summary").json()
     assert summary["total_requests"] == body["usage_rows"]
     assert summary["total_cost"] > 0
 
     reqs = client.get("/api/requests").json()
     assert len(reqs["items"]) > 0
-
-    alerts = client.get("/api/insights/alerts").json()["alerts"]
-    assert alerts and any(a["type"] == "cost_spike" for a in alerts)
 
 
 def test_demo_reset_is_deterministic(client, admin):
@@ -42,7 +39,6 @@ def test_anonymous_cannot_mutate_shared_data(client):
         == 401
     )
     assert client.post("/api/demo/reset").status_code == 403  # admin only
-    assert client.post("/api/insights/demo-spike").status_code == 403
     # the proxy still needs a virtual key -> no anonymous writes to usage_logs
     assert (
         client.post(
@@ -56,4 +52,3 @@ def test_anonymous_cannot_mutate_shared_data(client):
 def test_regular_user_cannot_reset_demo(signup):
     c, _ = signup()
     assert c.post("/api/demo/reset").status_code == 403
-    assert c.post("/api/insights/demo-spike").status_code == 403

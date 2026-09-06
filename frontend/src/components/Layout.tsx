@@ -56,9 +56,6 @@ export function Layout({ children }: { children: ReactNode }) {
             <NavLink to="/requests" className={navClass}>
               Requests
             </NavLink>
-            <NavLink to="/insights" className={navClass}>
-              Insights
-            </NavLink>
             {authenticated && (
               <NavLink to="/playground" className={navClass}>
                 Playground
