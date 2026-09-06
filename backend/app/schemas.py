@@ -79,6 +79,29 @@ class ProviderKeyIn(BaseModel):
     api_key: str = Field(min_length=8, max_length=400)
 
 
+# ---- account (per-user live mode) ----
+class AccountProviderStatus(BaseModel):
+    provider: str
+    configured: bool
+    source: str  # "env" | "account" | "none"
+    last4: str | None = None  # only when source == "account"
+
+
+class AccountOut(BaseModel):
+    email: str
+    is_admin: bool
+    can_live: bool  # is_admin or has at least one attached provider key
+    live_cap_usd: float | None  # None => the default below applies
+    live_cap_default_usd: float
+    live_cap_max_usd: float
+    live_spend_this_month: float
+    providers: list[AccountProviderStatus]
+
+
+class AccountPatch(BaseModel):
+    live_cap_usd: float | None = Field(default=None, ge=0)
+
+
 class KeyInspect(BaseModel):
     label: str
     allow_live: bool

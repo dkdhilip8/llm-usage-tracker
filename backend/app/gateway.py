@@ -180,43 +180,74 @@ def enforce_budget(db: Session, vk: VirtualKey) -> None:
         )
 
 
+def _account_provider_key(db: Session, user_id: int, provider: str) -> str | None:
+    """The owning account's own encrypted key for this provider, decrypted."""
+    from app.crypto import decrypt
+    from app.models import ProviderCredential
+
+    row = db.scalar(
+        select(ProviderCredential).where(
+            ProviderCredential.user_id == user_id,
+            ProviderCredential.provider == provider,
+        )
+    )
+    return decrypt(row.ciphertext) if row else None
+
+
 def live_key_for(db: Session, vk: VirtualKey, provider: str) -> str | None:
-    """The API key a live call for this key + provider would use: server env var,
-    then the owning workspace's own key, then the admin-global DB key."""
+    """The API key a live call for this key + provider would use: a server env var,
+    then the owning account's own key, then the admin-global DB key."""
     envk = settings.provider_api_key(provider)
     if envk:
         return envk
-    from app.workspace import provider_key, workspace_for_key
-
-    ws = workspace_for_key(db, vk)
-    if ws is not None:
-        wk = provider_key(db, ws.id, provider)
-        if wk:
-            return wk
+    if vk.user_id is not None:
+        ak = _account_provider_key(db, vk.user_id, provider)
+        if ak:
+            return ak
     if settings.ALLOW_DB_PROVIDER_KEYS and providers._db_keys.get(provider):
         return providers._db_keys[provider]
     return None
 
 
-def enforce_workspace_cap(db: Session, vk: VirtualKey) -> None:
-    """A workspace's live spend can't exceed its monthly cap."""
-    if not vk.allow_live:
-        return
-    from app.workspace import spend_this_month, workspace_for_key
+def live_spend_this_month(db: Session, user_id: int) -> float:
+    """Sum of this account's `mode='live'` cost since the 1st of the month."""
+    val = db.scalar(
+        select(func.coalesce(func.sum(UsageLog.cost), 0)).where(
+            UsageLog.mode == "live",
+            UsageLog.ts >= func.date_trunc("month", func.now()),
+            UsageLog.key_id.in_(
+                select(VirtualKey.id).where(VirtualKey.user_id == user_id)
+            ),
+        )
+    )
+    return float(val or 0)
 
-    ws = workspace_for_key(db, vk)
-    if ws is None:
+
+def account_live_cap(db: Session, user_id: int) -> float:
+    user = db.get(User, user_id)
+    if user is None or user.live_cap_usd is None:
+        return float(settings.LIVE_CAP_DEFAULT_USD)
+    return float(user.live_cap_usd)
+
+
+def enforce_account_cap(db: Session, vk: VirtualKey) -> None:
+    """An account's live spend can't exceed its monthly cap."""
+    if not vk.allow_live or vk.user_id is None:
         return
-    spent = spend_this_month(db, ws.id)
-    if spent >= float(ws.monthly_cap_usd):
+    user = db.get(User, vk.user_id)
+    if user is None or user.is_admin or user.is_demo:
+        return
+    cap = account_live_cap(db, vk.user_id)
+    spent = live_spend_this_month(db, vk.user_id)
+    if spent >= cap:
         raise HTTPException(
             status_code=402,
             detail={
                 "message": (
-                    f"workspace live-spend cap of ${float(ws.monthly_cap_usd):.2f}/month "
-                    f"reached (spent ${spent:.4f})"
+                    f"account live-spend cap of ${cap:.2f}/month reached "
+                    f"(spent ${spent:.4f}) — raise it on your Account page"
                 ),
-                "type": "workspace_cap_exceeded",
+                "type": "live_cap_exceeded",
                 "code": "402",
             },
         )

@@ -7,34 +7,31 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.gateway import period_spend
-from app.models import AllowedProvider, UsageLog, User, VirtualKey, Workspace
+from app.models import AllowedProvider, ProviderCredential, UsageLog, User, VirtualKey
 from app.providers import SUPPORTED
 from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUpdate
 from app.security import new_key, require_user
-from app.workspace import member_ids
 
-# Any signed-in user manages their own keys; a workspace owner also sees/edits
-# their members' keys; admin sees/edits everyone's.
+# Any signed-in user manages their own keys; admin sees/edits everyone's.
 router = APIRouter(prefix="/api/keys", tags=["keys"])
-
-
-def _owns_workspace(db: Session, user: User) -> Workspace | None:
-    if user.workspace_id is None:
-        return None
-    ws = db.get(Workspace, user.workspace_id)
-    return ws if ws and ws.owner_id == user.id else None
 
 
 def _visible_user_ids(db: Session, user: User) -> list[int] | None:
     """User ids whose keys `user` may see/manage. None = all (admin)."""
+    return None if user.is_admin else [user.id]
+
+
+def _live_allowed(db: Session, user: User) -> bool:
+    """A key may make live calls only if the owner is admin or has attached at
+    least one of their own provider API keys."""
     if user.is_admin:
-        return None
-    ws = _owns_workspace(db, user)
-    return member_ids(db, ws.id) or [user.id] if ws else [user.id]
-
-
-def _live_allowed(user: User) -> bool:
-    return user.is_admin or user.workspace_id is not None
+        return True
+    return (
+        db.scalar(
+            select(ProviderCredential.id).where(ProviderCredential.user_id == user.id)
+        )
+        is not None
+    )
 
 
 def _validate_providers(names: list[str]) -> list[str]:
@@ -100,9 +97,9 @@ def create_key(
         label=label,
         key_hash=hashed,
         key_prefix=prefix,
-        # live mode: admin, or anyone in a workspace (call-time still checks the
-        # workspace has a provider key + is under its cap)
-        allow_live=bool(body.allow_live) and _live_allowed(user),
+        # live mode: admin, or an account that has attached its own provider key
+        # (call-time still checks the key exists + the account is under its cap)
+        allow_live=bool(body.allow_live) and _live_allowed(db, user),
         default_provider=body.default_provider,
         monthly_budget_usd=body.monthly_budget_usd,
         budget_period=body.budget_period,
@@ -136,8 +133,8 @@ def list_keys(
     if visible is not None:
         stmt = stmt.where(VirtualKey.user_id.in_(visible))
     keys = db.scalars(stmt).all()
-    # show owner email when the viewer sees more than one account's keys
-    multi = user.is_admin or (visible is not None and len(visible) > 1)
+    # only admin sees more than one account's keys, so only admin needs owner emails
+    multi = user.is_admin
     emails = {u.id: u.email for u in db.scalars(select(User))} if multi else {}
     out: list[KeyOut] = []
     for k in keys:
@@ -173,7 +170,7 @@ def update_key(
 ) -> dict:
     vk = _owned(db, key_id, user)
     if body.allow_live is not None:
-        vk.allow_live = bool(body.allow_live) and _live_allowed(user)
+        vk.allow_live = bool(body.allow_live) and _live_allowed(db, user)
     if body.default_provider is not None:
         if body.default_provider and body.default_provider not in vk.provider_names():
             raise HTTPException(422, "default_provider must be one of allowed_providers")

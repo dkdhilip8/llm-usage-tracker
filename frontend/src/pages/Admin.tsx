@@ -10,7 +10,7 @@ import {
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Card } from "../components/Card";
-import { WorkspaceCard } from "../components/WorkspaceCard";
+import { LiveKeysCard } from "../components/LiveKeysCard";
 import { num, relTime, usd } from "../lib/format";
 
 function ProviderKeyRow({
@@ -356,13 +356,13 @@ function CreateKeyForm({
             />
             Allow live calls
             <span className="text-xs text-fg-subtle">
-              (uses the workspace key, under its monthly cap)
+              (runs on your provider key, under your monthly cap)
             </span>
           </label>
         ) : (
           <p className="text-[11px] text-fg-subtle">
-            Keys run simulated. Join or create a <strong>workspace</strong> to make live calls
-            on a shared provider key.
+            Keys run simulated. Add your own provider key under{" "}
+            <strong>Live provider keys</strong> to enable live calls.
           </p>
         )}
 
@@ -578,11 +578,11 @@ export function Account() {
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
         <div className="space-y-4">
           {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
-          {!isAdmin && <WorkspaceCard onChange={refresh} />}
+          {!isAdmin && <LiveKeysCard onChange={refresh} />}
         </div>
         <CreateKeyForm
           onCreated={refresh}
-          canLive={isAdmin || !!user?.in_workspace}
+          canLive={isAdmin || !!user?.can_live}
         />
       </div>
 

@@ -15,14 +15,14 @@ router = APIRouter(prefix="/api/insights", tags=["insights"])
 
 @router.get("/alerts")
 def alerts(db: Session = Depends(get_db), v: Viewer = Depends(viewer)) -> dict:
-    return {"alerts": insights.list_alerts(db, v.user_ids)}
+    return {"alerts": insights.list_alerts(db, v.user_id)}
 
 
 @router.get("/alerts/{alert_id}")
 def investigate(
     alert_id: str, db: Session = Depends(get_db), v: Viewer = Depends(viewer)
 ) -> dict:
-    result = insights.investigate(db, alert_id, v.user_ids)
+    result = insights.investigate(db, alert_id, v.user_id)
     if result is None:
         raise HTTPException(404, "alert not found or no longer anomalous")
     return result

@@ -33,6 +33,15 @@ def _has_col(db: Session, table: str, col: str) -> bool:
     )
 
 
+def _has_table(db: Session, table: str) -> bool:
+    return bool(
+        db.scalar(
+            text("SELECT 1 FROM information_schema.tables WHERE table_name = :t"),
+            {"t": table},
+        )
+    )
+
+
 def _migrate(db: Session) -> None:
     """No Alembic — a few guarded ALTERs for databases created before a schema bump.
     `Base.metadata.create_all` only creates missing tables, it never alters."""
@@ -50,25 +59,28 @@ def _migrate(db: Session) -> None:
         )
         db.commit()
 
-    # v2: workspaces — users.workspace_id + reshape provider_credentials
-    if not _has_col(db, "users", "workspace_id"):
-        db.execute(
-            text(
-                "ALTER TABLE users ADD COLUMN workspace_id BIGINT "
-                "REFERENCES workspaces(id) ON DELETE SET NULL"
-            )
-        )
-        db.execute(
-            text("CREATE INDEX IF NOT EXISTS ix_users_workspace_id ON users (workspace_id)")
-        )
+    # v2: per-account live mode — drop the short-lived workspaces feature, add
+    # users.live_cap_usd, and re-key provider_credentials on user_id.
+    if _has_col(db, "users", "workspace_id"):
+        # dropping the column also drops its FK to workspaces
+        db.execute(text("ALTER TABLE users DROP COLUMN IF EXISTS workspace_id"))
         db.commit()
-    if not _has_col(db, "provider_credentials", "workspace_id"):
-        # old shape (provider PK, no workspace_id) — empty in prod; drop + recreate
+    if _has_table(db, "workspaces"):
+        db.execute(text("DROP TABLE IF EXISTS workspaces CASCADE"))
+        db.commit()
+    if not _has_col(db, "users", "live_cap_usd"):
+        db.execute(text("ALTER TABLE users ADD COLUMN live_cap_usd NUMERIC(12, 6)"))
+        db.commit()
+    if _has_col(db, "provider_credentials", "workspace_id") or not _has_col(
+        db, "provider_credentials", "user_id"
+    ):
+        # encrypted keys can't be re-keyed; the table is empty in prod — drop + recreate
         db.execute(text("DROP TABLE IF EXISTS provider_credentials"))
         db.commit()
         from app.models import ProviderCredential
 
         ProviderCredential.__table__.create(bind=db.get_bind(), checkfirst=True)
+        db.commit()
 
 
 def bootstrap(db: Session) -> None:

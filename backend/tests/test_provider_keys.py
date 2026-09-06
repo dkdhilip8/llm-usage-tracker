@@ -41,7 +41,7 @@ def test_key_is_encrypted_at_rest(client, admin):
     with SessionLocal() as db:
         row = db.scalar(
             select(ProviderCredential).where(
-                ProviderCredential.workspace_id.is_(None),
+                ProviderCredential.user_id.is_(None),
                 ProviderCredential.provider == "openai",
             )
         )

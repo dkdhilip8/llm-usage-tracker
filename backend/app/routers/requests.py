@@ -38,7 +38,7 @@ def list_requests(
         .join(VirtualKey, VirtualKey.id == UsageLog.key_id)
         .order_by(UsageLog.id.desc())
         .limit(limit + 1),
-        v.user_ids,
+        v.user_id,
     )
     if cursor is not None:
         stmt = stmt.where(UsageLog.id < cursor)

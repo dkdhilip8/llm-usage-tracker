@@ -75,7 +75,7 @@ def _clean_tables():
         s.execute(
             text(
                 "TRUNCATE usage_logs, allowed_providers, virtual_keys, "
-                "provider_credentials, workspaces, users RESTART IDENTITY CASCADE"
+                "provider_credentials, users RESTART IDENTITY CASCADE"
             )
         )
         s.commit()

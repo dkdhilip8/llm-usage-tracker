@@ -43,34 +43,25 @@ export interface AuthUser {
   id: number;
   email: string;
   is_admin: boolean;
-  in_workspace: boolean;
+  can_live: boolean; // is_admin, or has attached their own provider key
 }
 
-export interface WorkspaceProvider {
+export interface AccountProvider {
   provider: string;
   configured: boolean;
-  source: "env" | "db" | "none";
+  source: "env" | "account" | "none";
   last4: string | null;
 }
 
-export interface WorkspaceMember {
-  user_id: number;
+export interface Account {
   email: string;
-  is_owner: boolean;
-  requests: number;
-  cost: number;
-}
-
-export interface Workspace {
-  name: string;
-  is_owner: boolean;
-  member_count: number;
-  monthly_cap_usd: number;
-  cap_max_usd: number;
-  spend_this_month: number;
-  providers: WorkspaceProvider[];
-  join_code?: string;
-  members?: WorkspaceMember[];
+  is_admin: boolean;
+  can_live: boolean;
+  live_cap_usd: number | null; // null => the default applies
+  live_cap_default_usd: number;
+  live_cap_max_usd: number;
+  live_spend_this_month: number;
+  providers: AccountProvider[];
 }
 
 export type BudgetPeriod = "day" | "week" | "month" | "custom";
@@ -274,25 +265,17 @@ export const api = {
   clearMyData: () => req<{ cleared: boolean }>("/api/account/data", { method: "DELETE" }),
   deleteAccount: () => req<{ deleted: boolean }>("/api/account", { method: "DELETE" }),
 
-  // ---- workspaces (team gateway) ----
-  getWorkspace: () => req<{ workspace: null } | Workspace>("/api/workspace"),
-  createWorkspace: (name: string) =>
-    req<Workspace>("/api/workspace", { method: "POST", body: JSON.stringify({ name }) }),
-  joinWorkspace: (code: string) =>
-    req<Workspace>("/api/workspace/join", { method: "POST", body: JSON.stringify({ code }) }),
-  leaveWorkspace: () => req<{ left: boolean }>("/api/workspace/leave", { method: "POST" }),
-  patchWorkspace: (patch: { name?: string; monthly_cap_usd?: number }) =>
-    req<Workspace>("/api/workspace", { method: "PATCH", body: JSON.stringify(patch) }),
-  deleteWorkspace: () => req<{ deleted: boolean }>("/api/workspace", { method: "DELETE" }),
-  removeMember: (userId: number) =>
-    req<{ removed: boolean }>(`/api/workspace/members/${userId}`, { method: "DELETE" }),
-  setWorkspaceKey: (provider: string, apiKey: string) =>
+  // ---- per-account live mode (your own provider key + monthly cap) ----
+  getAccount: () => req<Account>("/api/account"),
+  patchAccount: (patch: { live_cap_usd?: number }) =>
+    req<Account>("/api/account", { method: "PATCH", body: JSON.stringify(patch) }),
+  setAccountProviderKey: (provider: string, apiKey: string) =>
     req<{ provider: string; last4: string; valid: boolean }>(
-      `/api/workspace/providers/${provider}/key`,
+      `/api/account/providers/${provider}/key`,
       { method: "PUT", body: JSON.stringify({ api_key: apiKey }) },
     ),
-  clearWorkspaceKey: (provider: string) =>
-    req<{ provider: string }>(`/api/workspace/providers/${provider}/key`, { method: "DELETE" }),
+  clearAccountProviderKey: (provider: string) =>
+    req<{ provider: string }>(`/api/account/providers/${provider}/key`, { method: "DELETE" }),
 
   // public, read-only
   insights: () => req<{ alerts: InsightAlert[] }>("/api/insights/alerts"),

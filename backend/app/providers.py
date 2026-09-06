@@ -70,7 +70,7 @@ def _auth_headers(provider: str, key: str | None = None) -> dict[str, str]:
     return {"Authorization": f"Bearer {key}"}
 
 
-# ---- admin-global DB-stored keys (encrypted; workspace_id NULL) ----
+# ---- admin-global DB-stored keys (encrypted; user_id NULL) ----
 def load_db_keys(db: Session) -> None:
     """Refresh the in-process decrypted-key cache from the admin-global rows."""
     _db_keys.clear()
@@ -80,7 +80,7 @@ def load_db_keys(db: Session) -> None:
     from app.models import ProviderCredential
 
     for row in db.scalars(
-        select(ProviderCredential).where(ProviderCredential.workspace_id.is_(None))
+        select(ProviderCredential).where(ProviderCredential.user_id.is_(None))
     ):
         plain = decrypt(row.ciphertext)
         if plain:
@@ -92,7 +92,7 @@ def _global_row(db: Session, provider: str):
 
     return db.scalar(
         select(ProviderCredential).where(
-            ProviderCredential.workspace_id.is_(None),
+            ProviderCredential.user_id.is_(None),
             ProviderCredential.provider == provider,
         )
     )
@@ -108,7 +108,7 @@ def set_db_key(db: Session, provider: str, api_key: str) -> str:
     if row is None:
         db.add(
             ProviderCredential(
-                workspace_id=None, provider=provider, ciphertext=encrypt(api_key), last4=last4
+                user_id=None, provider=provider, ciphertext=encrypt(api_key), last4=last4
             )
         )
     else:
@@ -130,7 +130,7 @@ def clear_db_key(db: Session, provider: str) -> None:
 
 
 def check_key(provider: str, api_key: str) -> bool:
-    """One-off liveness check for an explicit key (a workspace's own). Not cached."""
+    """One-off liveness check for an explicit key (an account's own). Not cached."""
     if not api_key:
         return False
     try:
@@ -208,7 +208,7 @@ def call_provider(
 ) -> tuple[str, int, int, float | None]:
     """Returns (text, prompt_tokens, completion_tokens, actual_cost_usd).
 
-    `api_key` overrides the resolved key (used for a workspace's own key).
+    `api_key` overrides the resolved key (used for an account's own key).
     actual_cost is the real amount the provider charged when it reports one
     (OpenRouter does, via `usage.cost`); it is None for OpenAI/Anthropic, whose
     APIs return token counts only — the caller then estimates from the price table.
