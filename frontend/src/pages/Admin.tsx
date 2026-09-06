@@ -206,10 +206,13 @@ function ProviderPanel() {
 function CreateKeyForm({
   onCreated,
   configuredProviders = [],
+  liveCap = null,
 }: {
   onCreated: () => void;
   /** providers with a real key behind them (server env / admin-global / attached) */
   configuredProviders?: string[];
+  /** the account's effective monthly live-spend cap (null for admin) */
+  liveCap?: number | null;
 }) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>([]);
@@ -234,6 +237,11 @@ function CreateKeyForm({
   // every picked provider is configured, so live mode is available whenever at
   // least one provider is on the key.
   const liveReady = picked.length > 0;
+
+  // a per-key budget above the account's live cap is effectively clamped for live calls
+  const budgetNum = budget.trim() ? Number(budget) : null;
+  const budgetOverCap =
+    allowLive && liveCap != null && budgetNum != null && budgetNum > liveCap;
 
   useEffect(() => {
     if (!liveReady && allowLive) setAllowLive(false);
@@ -415,6 +423,13 @@ function CreateKeyForm({
           )}
         </label>
 
+        {budgetOverCap && (
+          <p className="text-[11px] text-amber-700 dark:text-amber-400">
+            This budget is above your ${liveCap} account live-spend cap — live calls stop at
+            the account cap first.
+          </p>
+        )}
+
         <button
           onClick={submit}
           disabled={!label.trim() || picked.length === 0}
@@ -509,6 +524,7 @@ export function Account() {
   const { authenticated, isAdmin, loading, logout, user, refresh: refreshAuth } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [configured, setConfigured] = useState<string[]>([]);
+  const [liveCap, setLiveCap] = useState<number | null>(null); // effective account cap (non-admin)
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -520,14 +536,20 @@ export function Account() {
       .catch((e: Error) => setError(e.message));
     // which providers have a real key behind them. Admin reads the server-side
     // provider status; a regular user reads their own attached keys.
-    (isAdmin
-      ? api.providers().then((rows) => rows.filter((r) => r.configured).map((r) => r.provider))
-      : api
-          .getAccount()
-          .then((a) => a.providers.filter((p) => p.configured).map((p) => p.provider))
-    )
-      .then(setConfigured)
-      .catch(() => setConfigured([]));
+    if (isAdmin) {
+      api
+        .providers()
+        .then((rows) => setConfigured(rows.filter((r) => r.configured).map((r) => r.provider)))
+        .catch(() => setConfigured([]));
+    } else {
+      api
+        .getAccount()
+        .then((a) => {
+          setConfigured(a.providers.filter((p) => p.configured).map((p) => p.provider));
+          setLiveCap(a.live_cap_usd ?? a.live_cap_default_usd);
+        })
+        .catch(() => setConfigured([]));
+    }
   }, [authenticated, isAdmin, refreshAuth]);
 
   const keyLiveReady = (k: KeyRow) =>
@@ -575,7 +597,11 @@ export function Account() {
           {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
           {!isAdmin && <LiveKeysCard onChange={refresh} />}
         </div>
-        <CreateKeyForm onCreated={refresh} configuredProviders={configured} />
+        <CreateKeyForm
+          onCreated={refresh}
+          configuredProviders={configured}
+          liveCap={isAdmin ? null : liveCap}
+        />
       </div>
 
       <Card title={`Virtual keys (${keys.length})`}>

@@ -206,6 +206,10 @@ export function LiveKeysCard({ onChange }: { onChange: () => void }) {
             </button>
             <span className="text-[11px] text-fg-subtle">(max ${acct.live_cap_max_usd})</span>
           </div>
+          <p className="mt-1.5 text-[11px] text-fg-subtle">
+            This is the ceiling on your <strong>live</strong> spend across <em>all</em> your keys
+            this month. A key still stops at its own budget first — whichever limit is lower wins.
+          </p>
         </div>
 
         {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
