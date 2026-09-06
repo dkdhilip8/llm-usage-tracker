@@ -34,6 +34,13 @@ class Settings(BaseSettings):
     MAX_USAGE_ROWS_PER_USER: int = 4000  # proxy stops recording past this
     PLAYGROUND_REQUESTS_PER_HOUR: int = 120
 
+    # ---- workspaces (team gateway: one owner's provider key, shared by members) ----
+    ALLOW_WORKSPACES: bool = True
+    MAX_WORKSPACES: int = 100
+    MAX_WORKSPACE_MEMBERS: int = 10  # excludes the owner
+    WORKSPACE_CAP_MAX_USD: float = 10.0  # hard ceiling on a workspace's monthly spend cap
+    WORKSPACE_DEFAULT_CAP_USD: float = 5.0
+
     # ---- provider-credential encryption (only used when ALLOW_DB_PROVIDER_KEYS) ----
     # A urlsafe-base64 32-byte Fernet key. Empty => derived from SECRET_KEY.
     ENCRYPTION_KEY: str = ""

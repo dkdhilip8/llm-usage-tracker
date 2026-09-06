@@ -8,6 +8,7 @@ from app.gateway import (
     authorize_provider,
     enforce_budget,
     enforce_user_quota,
+    enforce_workspace_cap,
     record_usage,
     run_completion,
 )
@@ -60,8 +61,9 @@ def proxy_chat(
         raise HTTPException(422, "prompt or messages is required")
     enforce_user_quota(db, vk)
     enforce_budget(db, vk)
+    enforce_workspace_cap(db, vk)
 
-    result = run_completion(vk, body.provider, body.model, prompt)
+    result = run_completion(db, vk, body.provider, body.model, prompt)
     row = record_usage(db, vk, body.provider, body.model, prompt, result)
 
     return ChatResponse(

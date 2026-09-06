@@ -180,17 +180,60 @@ def enforce_budget(db: Session, vk: VirtualKey) -> None:
         )
 
 
+def live_key_for(db: Session, vk: VirtualKey, provider: str) -> str | None:
+    """The API key a live call for this key + provider would use: server env var,
+    then the owning workspace's own key, then the admin-global DB key."""
+    envk = settings.provider_api_key(provider)
+    if envk:
+        return envk
+    from app.workspace import provider_key, workspace_for_key
+
+    ws = workspace_for_key(db, vk)
+    if ws is not None:
+        wk = provider_key(db, ws.id, provider)
+        if wk:
+            return wk
+    if settings.ALLOW_DB_PROVIDER_KEYS and providers._db_keys.get(provider):
+        return providers._db_keys[provider]
+    return None
+
+
+def enforce_workspace_cap(db: Session, vk: VirtualKey) -> None:
+    """A workspace's live spend can't exceed its monthly cap."""
+    if not vk.allow_live:
+        return
+    from app.workspace import spend_this_month, workspace_for_key
+
+    ws = workspace_for_key(db, vk)
+    if ws is None:
+        return
+    spent = spend_this_month(db, ws.id)
+    if spent >= float(ws.monthly_cap_usd):
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": (
+                    f"workspace live-spend cap of ${float(ws.monthly_cap_usd):.2f}/month "
+                    f"reached (spent ${spent:.4f})"
+                ),
+                "type": "workspace_cap_exceeded",
+                "code": "402",
+            },
+        )
+
+
 def run_completion(
-    vk: VirtualKey, provider: str, model: str, prompt: str
+    db: Session, vk: VirtualKey, provider: str, model: str, prompt: str
 ) -> CompletionResult:
-    go_live = (
-        settings.ENABLE_LIVE and vk.allow_live and providers.live_available(provider)
-    )
+    key = live_key_for(db, vk, provider)
+    go_live = settings.ENABLE_LIVE and vk.allow_live and key is not None
     actual_cost: float | None = None
     if go_live:
         try:
             t0 = time.perf_counter()
-            text, pt, ct, actual_cost = providers.call_provider(provider, model, prompt)
+            text, pt, ct, actual_cost = providers.call_provider(
+                provider, model, prompt, api_key=key
+            )
             latency_ms = int((time.perf_counter() - t0) * 1000)
             mode = "live"
         except Exception as exc:  # fall back to simulated rather than 5xx the demo

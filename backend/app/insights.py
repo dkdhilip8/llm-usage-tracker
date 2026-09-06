@@ -41,27 +41,29 @@ def _windows(now: datetime | None = None) -> dict:
     }
 
 
-def _scoped(user_id: int | None):
-    """A `where` term restricting to one user's keys, or None for all."""
-    if user_id is None:
+def _scoped(user_ids: list[int] | None):
+    """A `where` term restricting to these owners' keys, or None for all."""
+    if user_ids is None:
         return None
-    return UsageLog.key_id.in_(select(VirtualKey.id).where(VirtualKey.user_id == user_id))
+    return UsageLog.key_id.in_(
+        select(VirtualKey.id).where(VirtualKey.user_id.in_(user_ids))
+    )
 
 
-def _totals(db: Session, start: datetime, end: datetime, user_id: int | None = None) -> dict:
+def _totals(db: Session, start: datetime, end: datetime, user_ids: list[int] | None = None) -> dict:
     stmt = select(
         func.coalesce(func.sum(UsageLog.cost), 0),
         func.coalesce(func.sum(UsageLog.total_tokens), 0),
         func.count(),
     ).where(UsageLog.ts >= start, UsageLog.ts < end)
-    scoped = _scoped(user_id)
+    scoped = _scoped(user_ids)
     if scoped is not None:
         stmt = stmt.where(scoped)
     row = db.execute(stmt).one()
     return {"cost": float(row[0]), "tokens": int(row[1]), "requests": int(row[2])}
 
 
-def _by(db: Session, start: datetime, end: datetime, *cols, user_id: int | None = None) -> dict:
+def _by(db: Session, start: datetime, end: datetime, *cols, user_ids: list[int] | None = None) -> dict:
     stmt = (
         select(
             *cols,
@@ -72,7 +74,7 @@ def _by(db: Session, start: datetime, end: datetime, *cols, user_id: int | None 
         .where(UsageLog.ts >= start, UsageLog.ts < end)
         .group_by(*cols)
     )
-    scoped = _scoped(user_id)
+    scoped = _scoped(user_ids)
     if scoped is not None:
         stmt = stmt.where(scoped)
     out: dict = {}
@@ -82,10 +84,10 @@ def _by(db: Session, start: datetime, end: datetime, *cols, user_id: int | None 
     return out
 
 
-def _key_labels(db: Session, user_id: int | None = None) -> dict[int, str]:
+def _key_labels(db: Session, user_ids: list[int] | None = None) -> dict[int, str]:
     stmt = select(VirtualKey.id, VirtualKey.label)
-    if user_id is not None:
-        stmt = stmt.where(VirtualKey.user_id == user_id)
+    if user_ids is not None:
+        stmt = stmt.where(VirtualKey.user_id.in_(user_ids))
     return {row[0]: row[1] for row in db.execute(stmt)}
 
 
@@ -175,16 +177,16 @@ def _global_token_alert(current: int, prev: int, w: dict) -> dict:
 
 
 # ---------- detection ----------
-def list_alerts(db: Session, user_id: int | None = None) -> list[dict]:
+def list_alerts(db: Session, user_ids: list[int] | None = None) -> list[dict]:
     w = _windows()
-    labels = _key_labels(db, user_id)
+    labels = _key_labels(db, user_ids)
     alerts: list[dict] = []
 
     # Per-key cost spikes are the headline "who". Per-model spikes are almost always
     # a re-slice of the same event, so they surface as investigation *contributors*
     # rather than their own cards.
-    cur_key = _by(db, w["cur_start"], w["cur_end"], UsageLog.key_id, user_id=user_id)
-    base_key = _by(db, w["base_start"], w["base_end"], UsageLog.key_id, user_id=user_id)
+    cur_key = _by(db, w["cur_start"], w["cur_end"], UsageLog.key_id, user_ids=user_ids)
+    base_key = _by(db, w["base_start"], w["base_end"], UsageLog.key_id, user_ids=user_ids)
     for key_id, cur in cur_key.items():
         base_avg = base_key.get(key_id, {}).get("cost", 0.0) / BASELINE_DAYS
         if base_avg > 0 and cur["cost"] >= base_avg * SPIKE_RATIO and cur["cost"] >= MIN_ABS_COST:
@@ -192,10 +194,10 @@ def list_alerts(db: Session, user_id: int | None = None) -> list[dict]:
                 _key_cost_alert(key_id, labels.get(key_id, f"key {key_id}"), cur["cost"], base_avg, w)
             )
 
-    cur_tot = _totals(db, w["cur_start"], w["cur_end"], user_id)
+    cur_tot = _totals(db, w["cur_start"], w["cur_end"], user_ids)
     # Fallback: a global cost spike not attributable to any single key.
     if not any(a["type"] == "cost_spike" for a in alerts):
-        base_avg_cost = _totals(db, w["base_start"], w["base_end"], user_id)["cost"] / BASELINE_DAYS
+        base_avg_cost = _totals(db, w["base_start"], w["base_end"], user_ids)["cost"] / BASELINE_DAYS
         if (
             base_avg_cost > 0
             and cur_tot["cost"] >= base_avg_cost * SPIKE_RATIO
@@ -203,7 +205,7 @@ def list_alerts(db: Session, user_id: int | None = None) -> list[dict]:
         ):
             alerts.append(_global_cost_alert(cur_tot["cost"], base_avg_cost, w))
 
-    prev_tot = _totals(db, w["prev_start"], w["prev_end"], user_id)
+    prev_tot = _totals(db, w["prev_start"], w["prev_end"], user_ids)
     if (
         prev_tot["tokens"] > 0
         and cur_tot["tokens"] >= prev_tot["tokens"] * SPIKE_RATIO
@@ -233,7 +235,7 @@ def _narrative(metric: str, baseline: float, current: float, pct: int, contribut
     return "".join(parts) + "."
 
 
-def investigate(db: Session, alert_id: str, user_id: int | None = None) -> dict | None:
+def investigate(db: Session, alert_id: str, user_ids: list[int] | None = None) -> dict | None:
     """Decompose the 24h change (for the alert's metric) into the key, model, and
     request-volume that drove it. Contributors are each a *share of the increase*
     and deliberately overlap (top key and top model often coincide), so they do
@@ -253,19 +255,19 @@ def investigate(db: Session, alert_id: str, user_id: int | None = None) -> dict 
     else:
         return None
 
-    cur_tot = _totals(db, w["cur_start"], w["cur_end"], user_id)
-    base_tot = _totals(db, base_start, base_end, user_id)
+    cur_tot = _totals(db, w["cur_start"], w["cur_end"], user_ids)
+    base_tot = _totals(db, base_start, base_end, user_ids)
     cur_val, base_val = cur_tot[field], base_tot[field] / div
     base_reqs = base_tot["requests"] / div
     delta = cur_val - base_val
     if delta <= 0:
         return None
 
-    cur_key = _by(db, w["cur_start"], w["cur_end"], UsageLog.key_id, user_id=user_id)
-    base_key = _by(db, base_start, base_end, UsageLog.key_id, user_id=user_id)
-    cur_model = _by(db, w["cur_start"], w["cur_end"], UsageLog.provider, UsageLog.model, user_id=user_id)
-    base_model = _by(db, base_start, base_end, UsageLog.provider, UsageLog.model, user_id=user_id)
-    labels = _key_labels(db, user_id)
+    cur_key = _by(db, w["cur_start"], w["cur_end"], UsageLog.key_id, user_ids=user_ids)
+    base_key = _by(db, base_start, base_end, UsageLog.key_id, user_ids=user_ids)
+    cur_model = _by(db, w["cur_start"], w["cur_end"], UsageLog.provider, UsageLog.model, user_ids=user_ids)
+    base_model = _by(db, base_start, base_end, UsageLog.provider, UsageLog.model, user_ids=user_ids)
+    labels = _key_labels(db, user_ids)
 
     contributors: list[dict] = []
 

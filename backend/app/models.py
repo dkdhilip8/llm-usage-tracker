@@ -30,6 +30,30 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False, default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Set when the user creates or joins a workspace (owner or member).
+    workspace_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("workspaces.id", ondelete="SET NULL", use_alter=True, name="fk_users_workspace"),
+        index=True,
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class Workspace(Base):
+    """A team gateway: one owner's encrypted provider key(s), shared by members'
+    virtual keys for live calls, under a monthly spend cap."""
+
+    __tablename__ = "workspaces"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    owner_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    join_code: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    monthly_cap_usd: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False, default=5)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -91,12 +115,20 @@ class AllowedProvider(Base):
 
 
 class ProviderCredential(Base):
-    """An admin-entered provider API key, encrypted at rest. Only consulted when
-    ALLOW_DB_PROVIDER_KEYS is on; a server env var for the same provider wins."""
+    """A provider API key, encrypted at rest. `workspace_id` set = that workspace's
+    key (used by its members' live calls). `workspace_id` NULL = the admin-global
+    key (only when ALLOW_DB_PROVIDER_KEYS, local/non-prod). An env var always wins."""
 
     __tablename__ = "provider_credentials"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "provider", name="uq_provcred_ws_provider"),
+    )
 
-    provider: Mapped[str] = mapped_column(String, primary_key=True)  # openai|anthropic|openrouter
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    workspace_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    provider: Mapped[str] = mapped_column(String, nullable=False)  # openai|anthropic|openrouter
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet token
     last4: Mapped[str] = mapped_column(String(8), nullable=False)  # display only
     updated_at: Mapped[datetime] = mapped_column(

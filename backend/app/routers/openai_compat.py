@@ -26,6 +26,8 @@ from app.gateway import (
     CompletionResult,
     enforce_budget,
     enforce_user_quota,
+    enforce_workspace_cap,
+    live_key_for,
     record_usage,
     record_usage_detached,
     resolve_target,
@@ -78,12 +80,14 @@ def chat_completions(
         raise HTTPException(422, "messages must contain user text content")
     enforce_user_quota(db, vk)
     enforce_budget(db, vk)
+    enforce_workspace_cap(db, vk)
+    live_key = live_key_for(db, vk, provider)
 
     cid = f"chatcmpl-{uuid4().hex}"
     created = int(time.time())
 
     if not body.stream:
-        result = run_completion(vk, provider, model, prompt)
+        result = run_completion(db, vk, provider, model, prompt)
         record_usage(db, vk, provider, model, prompt, result, request_id=cid)
         return {
             "id": cid,
@@ -122,14 +126,14 @@ def chat_completions(
         go_live = (
             settings.ENABLE_LIVE
             and vk.allow_live
-            and providers.live_available(provider)
+            and live_key is not None
             and provider in ("openai", "openrouter")
         )
         if go_live:
             try:
                 first = True
                 for kind, payload in providers.stream_openai_compatible(
-                    provider, model, prompt
+                    provider, model, prompt, api_key=live_key
                 ):
                     if kind == "delta":
                         text = str(payload)

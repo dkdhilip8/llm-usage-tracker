@@ -58,7 +58,12 @@ def _me(user: User | None) -> dict:
         return {"authenticated": False, "user": None}
     return {
         "authenticated": True,
-        "user": {"id": user.id, "email": user.email, "is_admin": user.is_admin},
+        "user": {
+            "id": user.id,
+            "email": user.email,
+            "is_admin": user.is_admin,
+            "in_workspace": user.workspace_id is not None,
+        },
     }
 
 

@@ -33,11 +33,18 @@ def test_key_is_encrypted_at_rest(client, admin):
     client.put(
         "/api/providers/openai/key", json={"api_key": "sk-plaintext-1234"}, headers=admin
     )
+    from sqlalchemy import select
+
     from app.db import SessionLocal
     from app.models import ProviderCredential
 
     with SessionLocal() as db:
-        row = db.get(ProviderCredential, "openai")
+        row = db.scalar(
+            select(ProviderCredential).where(
+                ProviderCredential.workspace_id.is_(None),
+                ProviderCredential.provider == "openai",
+            )
+        )
         assert row is not None
         assert "sk-plaintext-1234" not in row.ciphertext
         assert decrypt(row.ciphertext) == "sk-plaintext-1234"

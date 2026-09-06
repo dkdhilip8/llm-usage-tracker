@@ -10,6 +10,7 @@ import {
 } from "../lib/api";
 import { useAuth } from "../lib/auth";
 import { Card } from "../components/Card";
+import { WorkspaceCard } from "../components/WorkspaceCard";
 import { num, relTime, usd } from "../lib/format";
 
 function ProviderKeyRow({
@@ -204,10 +205,10 @@ function ProviderPanel() {
 
 function CreateKeyForm({
   onCreated,
-  isAdmin = false,
+  canLive = false,
 }: {
   onCreated: () => void;
-  isAdmin?: boolean;
+  canLive?: boolean;
 }) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>(["openai"]);
@@ -346,7 +347,7 @@ function CreateKeyForm({
           </div>
         )}
 
-        {isAdmin ? (
+        {canLive ? (
           <label className="flex items-center gap-2 text-sm text-fg-muted">
             <input
               type="checkbox"
@@ -355,12 +356,13 @@ function CreateKeyForm({
             />
             Allow live calls
             <span className="text-xs text-fg-subtle">
-              (still gated by <code>ENABLE_LIVE</code> + provider validity)
+              (uses the workspace key, under its monthly cap)
             </span>
           </label>
         ) : (
           <p className="text-[11px] text-fg-subtle">
-            Keys run in simulated mode. Live provider calls are admin-only on this demo.
+            Keys run simulated. Join or create a <strong>workspace</strong> to make live calls
+            on a shared provider key.
           </p>
         )}
 
@@ -523,17 +525,18 @@ function AccountTools({ onChange }: { onChange: () => void }) {
 }
 
 export function Account() {
-  const { authenticated, isAdmin, loading, logout, user } = useAuth();
+  const { authenticated, isAdmin, loading, logout, user, refresh: refreshAuth } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     if (!authenticated) return;
+    void refreshAuth();
     api
       .listKeys()
       .then(setKeys)
       .catch((e: Error) => setError(e.message));
-  }, [authenticated]);
+  }, [authenticated, refreshAuth]);
 
   useEffect(() => {
     refresh();
@@ -573,8 +576,14 @@ export function Account() {
       )}
 
       <div className="grid gap-4 lg:grid-cols-[320px_1fr]">
-        {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
-        <CreateKeyForm onCreated={refresh} isAdmin={isAdmin} />
+        <div className="space-y-4">
+          {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
+          {!isAdmin && <WorkspaceCard onChange={refresh} />}
+        </div>
+        <CreateKeyForm
+          onCreated={refresh}
+          canLive={isAdmin || !!user?.in_workspace}
+        />
       </div>
 
       {isAdmin && <DemoTools onChange={refresh} />}

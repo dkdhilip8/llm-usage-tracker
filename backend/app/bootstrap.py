@@ -21,28 +21,54 @@ def demo_user_id(db: Session) -> int:
     return uid
 
 
+def _has_col(db: Session, table: str, col: str) -> bool:
+    return bool(
+        db.scalar(
+            text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :t AND column_name = :c"
+            ),
+            {"t": table, "c": col},
+        )
+    )
+
+
 def _migrate(db: Session) -> None:
-    """Add virtual_keys.user_id on databases created before multi-tenancy.
-    `Base.metadata.create_all` doesn't ALTER existing tables."""
-    has_col = db.scalar(
-        text(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name = 'virtual_keys' AND column_name = 'user_id'"
+    """No Alembic — a few guarded ALTERs for databases created before a schema bump.
+    `Base.metadata.create_all` only creates missing tables, it never alters."""
+    # v1: multi-tenancy — virtual_keys.user_id
+    if not _has_col(db, "virtual_keys", "user_id"):
+        db.execute(text("ALTER TABLE virtual_keys ADD COLUMN user_id BIGINT"))
+        db.execute(
+            text(
+                "ALTER TABLE virtual_keys ADD CONSTRAINT virtual_keys_user_id_fkey "
+                "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+            )
         )
-    )
-    if has_col:
-        return
-    db.execute(text("ALTER TABLE virtual_keys ADD COLUMN user_id BIGINT"))
-    db.execute(
-        text(
-            "ALTER TABLE virtual_keys ADD CONSTRAINT virtual_keys_user_id_fkey "
-            "FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE"
+        db.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_virtual_keys_user_id ON virtual_keys (user_id)")
         )
-    )
-    db.execute(
-        text("CREATE INDEX IF NOT EXISTS ix_virtual_keys_user_id ON virtual_keys (user_id)")
-    )
-    db.commit()
+        db.commit()
+
+    # v2: workspaces — users.workspace_id + reshape provider_credentials
+    if not _has_col(db, "users", "workspace_id"):
+        db.execute(
+            text(
+                "ALTER TABLE users ADD COLUMN workspace_id BIGINT "
+                "REFERENCES workspaces(id) ON DELETE SET NULL"
+            )
+        )
+        db.execute(
+            text("CREATE INDEX IF NOT EXISTS ix_users_workspace_id ON users (workspace_id)")
+        )
+        db.commit()
+    if not _has_col(db, "provider_credentials", "workspace_id"):
+        # old shape (provider PK, no workspace_id) — empty in prod; drop + recreate
+        db.execute(text("DROP TABLE IF EXISTS provider_credentials"))
+        db.commit()
+        from app.models import ProviderCredential
+
+        ProviderCredential.__table__.create(bind=db.get_bind(), checkfirst=True)
 
 
 def bootstrap(db: Session) -> None:

@@ -4,20 +4,27 @@ An **LLM gateway** demo: issue per-user virtual API keys with per-provider acces
 send requests through the proxy, and watch a dashboard of per-user token usage and cost.
 OpenAI · Anthropic · OpenRouter.
 
-> **Demo only — not for production.** Ships in **simulated** mode (no real provider calls, no
-> API keys, $0 cost).
+> **Demo only — not for production.** **Simulated** by default (no real provider calls, no host
+> API keys, $0 to run). Real calls happen only inside a **workspace**, on that workspace owner's
+> own key, under a spend cap — see below.
 >
 > **Multi-tenant.** Anyone can **sign up** (email + password, scrypt-hashed) and gets their own
 > virtual keys, Playground, and a private dashboard seeded with a small sample dataset.
 > **Logged out**, the Dashboard / Requests / Insights tabs show a shared **demo** account's data
-> (read-only). **Logged in**, they show only *your* usage. There is one privileged **admin**
-> account (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for curl / SDK / CI)
-> that sees everything and owns provider config + the demo-data reset. **Live provider calls are
-> admin-only** — every signed-up user runs simulated, so the deployment stays $0.
+> (read-only). **Logged in**, they show only *your* usage. One privileged **admin** account
+> (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for curl / SDK / CI) sees
+> everything and owns provider config + the demo-data reset.
 >
-> Abuse controls for the public $0 database: `MAX_USERS`, signups/IP/hour, and per-account caps
-> on keys, stored usage rows, and Playground requests/hour. No email verification, no password
-> reset — it's a demo.
+> **Workspaces (team gateway).** A user can create a workspace, set one encrypted
+> OpenAI/Anthropic/OpenRouter key, and share a **join code**. Members' virtual keys then make
+> **real live calls** on that key — without ever seeing it — under a monthly spend cap (hard
+> ceiling `WORKSPACE_CAP_MAX_USD`, default $10). The owner sees the whole workspace and per-member
+> cost; members see only their own. Standalone users (no workspace) stay **simulated**. The host
+> sets no server-side provider key, so nothing is billed to the deployment.
+>
+> Abuse controls for the public database: `MAX_USERS`, `MAX_WORKSPACES`, `MAX_WORKSPACE_MEMBERS`,
+> signups/IP/hour, per-account caps on keys / stored usage rows / requests-per-hour, and the
+> server-enforced workspace spend cap. No email verification, no password reset — it's a demo.
 >
 > **Provider keys** normally come from server env vars only. Locally / non-prod an admin can set
 > `ALLOW_DB_PROVIDER_KEYS=true` and paste keys in the UI — stored **AES-encrypted** in the DB,
@@ -159,7 +166,7 @@ curl -s "$BASE/api/usage/summary"
 | Repo + blueprint | GitHub public repo | $0 | No |
 | Public URL | `*.onrender.com` subdomain | $0 | No |
 | Warmup pings | UptimeRobot / cron-job.org / GitHub Actions cron | $0 | No |
-| LLM usage | none — simulated only | $0 | — |
+| LLM usage | simulated by default; workspace members' live calls bill the **workspace owner's** own provider key (capped) — never the host | $0 to run | No |
 
 The only "cost" of the free tier is a ~30–60 s cold start after 15 min idle (Render) and a
 ~300 ms cold DB wake (Neon).
@@ -210,12 +217,15 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | `MAX_KEYS_PER_USER` | `10` | Virtual-key cap per non-admin account. |
 | `MAX_USAGE_ROWS_PER_USER` | `4000` | The proxy stops recording once an account hits this. |
 | `PLAYGROUND_REQUESTS_PER_HOUR` | `120` | Per-account proxy rate limit (non-admin). |
+| `ALLOW_WORKSPACES` | `true` | Team gateway: an owner shares one encrypted provider key with members' live keys. |
+| `MAX_WORKSPACES` / `MAX_WORKSPACE_MEMBERS` | `100` / `10` | Caps for the public deploy. |
+| `WORKSPACE_CAP_MAX_USD` / `WORKSPACE_DEFAULT_CAP_USD` | `10` / `5` | Hard ceiling / default for a workspace's monthly live-spend cap. |
 | `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing **and** session-cookie signing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` | `""` | Server-side provider creds. Always win over a DB-stored key. Never shown in the UI. |
 | `ALLOW_DB_PROVIDER_KEYS` | `false` | Let the Admin UI store provider keys (AES-encrypted) in the DB. Convenience for local / non-prod — **hard-blocked when `ENVIRONMENT` is deployed**. |
 | `ENCRYPTION_KEY` | `""` | Fernet key (urlsafe-base64, 32 bytes) for that encryption. Empty ⇒ derived from `SECRET_KEY`. |
-| `ENABLE_LIVE` | `false` | Master switch for real upstream calls. Keep `false` for the public demo. |
+| `ENABLE_LIVE` | `false` | Master switch for real upstream calls. `true` on the deploy — but only workspace keys can go live (on the workspace owner's key, under its cap); standalone users are always simulated. |
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
 | `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the (public) Requests tab. Off by default and on the public deploy — bodies can be sensitive. |
 | `SIMULATE_LATENCY_SLEEP` | `true` | Simulator sleeps to mimic real latency. Tests set `false`. |
@@ -236,6 +246,10 @@ endpoints are **viewer-scoped**: logged out → the demo account; user → their
 | POST | `/api/auth/signup` `\|` `/login` | — | `{email, password}` → sets `httpOnly` session cookie, `{authenticated, user:{id,email,is_admin}}` |
 | POST `\|` GET | `/api/auth/logout` `\|` `/me` | — | clear the cookie / current principal |
 | POST `\|` DELETE `\|` DELETE | `/api/account/sample` `\|` `/api/account/data` `\|` `/api/account` | user | regenerate my sample data / wipe my keys+usage / delete my account |
+| GET `\|` POST `\|` DELETE | `/api/workspace` | user | my workspace (`{workspace:null}` if none) / create one (I become owner) / delete it (owner) |
+| POST `\|` POST `\|` PATCH | `/api/workspace/join` `\|` `/leave` `\|` `` | user | join with `{code}` / leave (member) / rename + set cap (owner; cap clamped to `WORKSPACE_CAP_MAX_USD`) |
+| PUT `\|` DELETE | `/api/workspace/providers/{provider}/key` | owner | set / clear the workspace's encrypted provider key |
+| DELETE | `/api/workspace/members/{id}` | owner | remove a member (drops their keys) |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured, valid, source, last4, checked_at}]` (`?refresh=true` to re-check) |
 | PUT `\|` DELETE | `/api/providers/{provider}/key` | admin | set / clear a DB-stored (encrypted) provider key. `404` unless `ALLOW_DB_PROVIDER_KEYS`; `409` if a server env var is set for that provider |
 | POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(admin only), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
@@ -258,10 +272,13 @@ admin can mint — so a public visitor has no path to modify the shared dataset.
 
 ## Data model
 
-- **users** — `id, email (unique), password_hash (scrypt), is_admin, is_demo, created_at`. The
-  admin row is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot; the demo row owns
-  the shared logged-out dataset and can't log in. Sessions are a stateless HMAC-signed cookie
-  carrying the user id.
+- **users** — `id, email (unique), password_hash (scrypt), is_admin, is_demo, workspace_id →
+  workspaces, created_at`. The admin row is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD`
+  on boot; the demo row owns the shared logged-out dataset and can't log in. Sessions are a
+  stateless HMAC-signed cookie carrying the user id.
+- **workspaces** — `id, owner_id → users (unique), name, join_code (unique), monthly_cap_usd,
+  created_at`. A member's live calls resolve the workspace's encrypted provider key; a
+  server-side `enforce_workspace_cap` blocks them once the month's live spend hits the cap.
 - **virtual_keys** — `id, user_id → users, label, key_hash, key_prefix, allow_live,
   default_provider, monthly_budget_usd, budget_period, budget_start, budget_end, created_at,
   last_used_at, revoked_at`. Only the HMAC hash and an 11-char prefix are stored; the raw key is
@@ -275,9 +292,11 @@ admin can mint — so a public visitor has no path to modify the shared dataset.
   total_tokens, cost, cost_source, mode, simulated, latency_ms, status, prompt_preview,
   response_preview, ts`. `cost_source` = `provider` (real charge, e.g. OpenRouter `usage.cost`) or
   `configured` (tokens × price table). Previews are null unless `LOG_BODIES=true`.
-- **provider_credentials** — `(provider, ciphertext, last4, updated_at)`. Only present/consulted
-  when `ALLOW_DB_PROVIDER_KEYS` is on (never in a deployed environment). `ciphertext` is a Fernet
-  (AES-128-CBC + HMAC) token; the plaintext key is never returned by the API. A server env var
+- **provider_credentials** — `(id, workspace_id → workspaces, provider, ciphertext, last4,
+  updated_at)`, unique on `(workspace_id, provider)`. `workspace_id` set = that workspace's shared
+  key; `workspace_id` NULL = the admin-global key (only when `ALLOW_DB_PROVIDER_KEYS`, never in a
+  deployed environment). `ciphertext` is a Fernet (AES-128-CBC + HMAC) token; the plaintext key is
+  never returned by the API. A server env var
   for the same provider always wins.
 
 On a deployed environment, provider credentials live only in server env vars — never in the DB,

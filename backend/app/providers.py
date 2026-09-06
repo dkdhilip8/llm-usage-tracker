@@ -63,37 +63,54 @@ def is_configured(provider: str) -> bool:
     return bool(resolved_key(provider))
 
 
-def _auth_headers(provider: str) -> dict[str, str]:
-    key = resolved_key(provider)
+def _auth_headers(provider: str, key: str | None = None) -> dict[str, str]:
+    key = resolved_key(provider) if key is None else key
     if provider == "anthropic":
         return {"x-api-key": key, "anthropic-version": "2023-06-01"}
     return {"Authorization": f"Bearer {key}"}
 
 
-# ---- DB-stored keys (encrypted) ----
+# ---- admin-global DB-stored keys (encrypted; workspace_id NULL) ----
 def load_db_keys(db: Session) -> None:
-    """Refresh the in-process decrypted-key cache from provider_credentials."""
+    """Refresh the in-process decrypted-key cache from the admin-global rows."""
     _db_keys.clear()
     if not settings.ALLOW_DB_PROVIDER_KEYS:
         return
     from app.crypto import decrypt
     from app.models import ProviderCredential
 
-    for row in db.scalars(select(ProviderCredential)):
+    for row in db.scalars(
+        select(ProviderCredential).where(ProviderCredential.workspace_id.is_(None))
+    ):
         plain = decrypt(row.ciphertext)
         if plain:
             _db_keys[row.provider] = plain
 
 
+def _global_row(db: Session, provider: str):
+    from app.models import ProviderCredential
+
+    return db.scalar(
+        select(ProviderCredential).where(
+            ProviderCredential.workspace_id.is_(None),
+            ProviderCredential.provider == provider,
+        )
+    )
+
+
 def set_db_key(db: Session, provider: str, api_key: str) -> str:
-    """Encrypt + upsert an admin-entered key. Returns its last 4 chars."""
+    """Encrypt + upsert the admin-global key. Returns its last 4 chars."""
     from app.crypto import encrypt
     from app.models import ProviderCredential
 
     last4 = api_key[-4:]
-    row = db.get(ProviderCredential, provider)
+    row = _global_row(db, provider)
     if row is None:
-        db.add(ProviderCredential(provider=provider, ciphertext=encrypt(api_key), last4=last4))
+        db.add(
+            ProviderCredential(
+                workspace_id=None, provider=provider, ciphertext=encrypt(api_key), last4=last4
+            )
+        )
     else:
         row.ciphertext = encrypt(api_key)
         row.last4 = last4
@@ -104,14 +121,25 @@ def set_db_key(db: Session, provider: str, api_key: str) -> str:
 
 
 def clear_db_key(db: Session, provider: str) -> None:
-    from app.models import ProviderCredential
-
-    row = db.get(ProviderCredential, provider)
+    row = _global_row(db, provider)
     if row is not None:
         db.delete(row)
         db.commit()
     _db_keys.pop(provider, None)
     _cache.pop(provider, None)
+
+
+def check_key(provider: str, api_key: str) -> bool:
+    """One-off liveness check for an explicit key (a workspace's own). Not cached."""
+    if not api_key:
+        return False
+    try:
+        resp = httpx.get(
+            _LIVENESS_URLS[provider], headers=_auth_headers(provider, api_key), timeout=8.0
+        )
+        return resp.status_code == 200
+    except Exception:
+        return False
 
 
 def check_liveness(provider: str, *, force: bool = False) -> bool:
@@ -174,17 +202,18 @@ def live_available(provider: str) -> bool:
     return settings.ENABLE_LIVE and is_configured(provider) and check_liveness(provider)
 
 
-# ---- real upstream calls (only reached when live_available and key.allow_live) ----
+# ---- real upstream calls (only reached when live gate passes) ----
 def call_provider(
-    provider: str, model: str, prompt: str
+    provider: str, model: str, prompt: str, api_key: str | None = None
 ) -> tuple[str, int, int, float | None]:
     """Returns (text, prompt_tokens, completion_tokens, actual_cost_usd).
 
+    `api_key` overrides the resolved key (used for a workspace's own key).
     actual_cost is the real amount the provider charged when it reports one
     (OpenRouter does, via `usage.cost`); it is None for OpenAI/Anthropic, whose
     APIs return token counts only — the caller then estimates from the price table.
     Raises on transport/HTTP failure."""
-    headers = _auth_headers(provider)
+    headers = _auth_headers(provider, api_key)
 
     if provider == "anthropic":
         r = httpx.post(
@@ -233,14 +262,14 @@ def call_provider(
 
 
 def stream_openai_compatible(
-    provider: str, model: str, prompt: str
+    provider: str, model: str, prompt: str, api_key: str | None = None
 ) -> Iterator[tuple[str, object]]:
     """True SSE passthrough for OpenAI-shaped providers (openai, openrouter).
 
     Yields ("delta", text) for each content delta, then a final
     ("done", {"prompt_tokens", "completion_tokens", "cost"}). Raises on transport
     or HTTP error (caller falls back to simulated)."""
-    headers = _auth_headers(provider)
+    headers = _auth_headers(provider, api_key)
     body: dict = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],

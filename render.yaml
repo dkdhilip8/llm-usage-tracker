@@ -24,10 +24,12 @@ services:
         value: admin
       - key: ADMIN_PASSWORD
         generateValue: true
-      # Keep the public demo simulated + free. To enable real calls later: set
-      # ENABLE_LIVE=true, add the provider key(s) below, and give a key `allow_live`.
+      # Live upstream calls ARE enabled — but only for workspace keys, which run
+      # on the workspace owner's own encrypted provider key under a hard
+      # $WORKSPACE_CAP_MAX_USD/month cap. Standalone users stay simulated. No
+      # server-side provider key is set here, so nothing is billed to the host.
       - key: ENABLE_LIVE
-        value: "false"
+        value: "true"
       # Populate the shared demo dataset on first boot (no-op once usage exists).
       - key: SEED_DEMO_DATA
         value: "true"
