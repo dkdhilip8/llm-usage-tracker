@@ -3,6 +3,7 @@ import { Navigate } from "react-router-dom";
 import {
   api,
   PROVIDERS,
+  type Account,
   type BudgetPeriod,
   type KeyCreated,
   type KeyRow,
@@ -205,10 +206,13 @@ function ProviderPanel() {
 
 function CreateKeyForm({
   onCreated,
-  canLive = false,
+  isAdmin = false,
+  configuredProviders = [],
 }: {
   onCreated: () => void;
-  canLive?: boolean;
+  isAdmin?: boolean;
+  /** providers this account has a usable live key for (env or attached) */
+  configuredProviders?: string[];
 }) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>(["openai"]);
@@ -221,6 +225,14 @@ function CreateKeyForm({
   const [created, setCreated] = useState<KeyCreated | null>(null);
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // A live call only works if one of the selected providers has a key behind it.
+  const liveReady = isAdmin || allowed.some((p) => configuredProviders.includes(p));
+  const missingLive = isAdmin ? [] : allowed.filter((p) => !configuredProviders.includes(p));
+
+  useEffect(() => {
+    if (!liveReady && allowLive) setAllowLive(false);
+  }, [liveReady, allowLive]);
 
   function toggle(p: string) {
     setAllowed((a) => (a.includes(p) ? a.filter((x) => x !== p) : [...a, p]));
@@ -347,24 +359,29 @@ function CreateKeyForm({
           </div>
         )}
 
-        {canLive ? (
-          <label className="flex items-center gap-2 text-sm text-fg-muted">
-            <input
-              type="checkbox"
-              checked={allowLive}
-              onChange={(e) => setAllowLive(e.target.checked)}
-            />
-            Allow live calls
+        <label
+          className={`flex items-center gap-2 text-sm ${
+            liveReady ? "text-fg-muted" : "cursor-not-allowed text-fg-subtle"
+          }`}
+        >
+          <input
+            type="checkbox"
+            checked={allowLive}
+            disabled={!liveReady}
+            onChange={(e) => setAllowLive(e.target.checked)}
+          />
+          Allow live calls
+          {liveReady ? (
             <span className="text-xs text-fg-subtle">
               (runs on your provider key, under your monthly cap)
             </span>
-          </label>
-        ) : (
-          <p className="text-[11px] text-fg-subtle">
-            Keys run simulated. Add your own provider key under{" "}
-            <strong>Live provider keys</strong> to enable live calls.
-          </p>
-        )}
+          ) : (
+            <span className="text-xs text-fg-subtle">
+              — no live key for {missingLive.join(", ") || "these providers"}. Add one under{" "}
+              <strong>Live provider keys</strong>.
+            </span>
+          )}
+        </label>
 
         <button
           onClick={submit}
@@ -527,6 +544,7 @@ function AccountTools({ onChange }: { onChange: () => void }) {
 export function Account() {
   const { authenticated, isAdmin, loading, logout, user, refresh: refreshAuth } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
+  const [account, setAccount] = useState<Account | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -536,7 +554,20 @@ export function Account() {
       .listKeys()
       .then(setKeys)
       .catch((e: Error) => setError(e.message));
-  }, [authenticated, refreshAuth]);
+    if (!isAdmin) {
+      api
+        .getAccount()
+        .then(setAccount)
+        .catch(() => setAccount(null));
+    }
+  }, [authenticated, isAdmin, refreshAuth]);
+
+  // providers this account can actually make live calls on (env or attached key)
+  const liveProviders = account
+    ? account.providers.filter((p) => p.source !== "none").map((p) => p.provider)
+    : [];
+  const keyLiveReady = (k: KeyRow) =>
+    isAdmin || k.allowed_providers.some((p) => liveProviders.includes(p));
 
   useEffect(() => {
     refresh();
@@ -582,7 +613,8 @@ export function Account() {
         </div>
         <CreateKeyForm
           onCreated={refresh}
-          canLive={isAdmin || !!user?.can_live}
+          isAdmin={isAdmin}
+          configuredProviders={liveProviders}
         />
       </div>
 
@@ -650,8 +682,13 @@ export function Account() {
                             .then(refresh)
                             .catch((e: Error) => setError(e.message))
                         }
-                        title="Toggle live calls for this key"
-                        className={`rounded px-2 py-0.5 text-[11px] font-bold ${
+                        disabled={!keyLiveReady(k) && !k.allow_live}
+                        title={
+                          keyLiveReady(k)
+                            ? "Toggle live calls for this key"
+                            : "No provider key for this key's providers — add one under Live provider keys"
+                        }
+                        className={`rounded px-2 py-0.5 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-50 ${
                           k.allow_live
                             ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
                             : "bg-fill text-fg-subtle"

@@ -67,6 +67,28 @@ def test_allow_live_requires_a_provider_key(signup):
     assert c.patch(f"/api/keys/{k['id']}", json={"allow_live": True}).json()["allow_live"] is True
 
 
+def test_allow_live_gated_on_the_keys_own_providers(signup):
+    c, _ = signup("mismatch@example.com")
+    c.delete("/api/account/data")
+    c.put("/api/account/providers/anthropic/key", json={"api_key": "sk-ant-mine-1234"})
+
+    # only anthropic is configured; an openai-only key can't go live
+    assert _mk_key(c, allowed_providers=["openai"], allow_live=True)["allow_live"] is False
+    # a key that allows anthropic can
+    assert _mk_key(c, allowed_providers=["anthropic"], allow_live=True)["allow_live"] is True
+    # a key allowing both is fine — at least one provider is ready
+    assert (
+        _mk_key(c, allowed_providers=["openai", "anthropic"], allow_live=True)["allow_live"]
+        is True
+    )
+
+    # add the openai key, then flip the openai-only key on
+    k = _mk_key(c, allowed_providers=["openai"], label="later")
+    assert k["allow_live"] is False
+    c.put("/api/account/providers/openai/key", json={"api_key": "sk-openai-mine-5678"})
+    assert c.patch(f"/api/keys/{k['id']}", json={"allow_live": True}).json()["allow_live"] is True
+
+
 def test_live_cap_patch_and_clamp(signup):
     c, _ = signup("cap@example.com")
     acct = c.get("/api/account").json()
