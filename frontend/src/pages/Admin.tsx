@@ -216,7 +216,6 @@ function CreateKeyForm({
 }) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>([]);
-  const [defaultProvider, setDefaultProvider] = useState("");
   const [budget, setBudget] = useState("");
   const [budgetPeriod, setBudgetPeriod] = useState<BudgetPeriod>("month");
   const [budgetStart, setBudgetStart] = useState("");
@@ -253,16 +252,6 @@ function CreateKeyForm({
     });
   }, [canPick]);
 
-  // a single-provider key defaults to that provider (so callers can send bare
-  // model names); a multi-provider key leaves it unset unless chosen; a stale
-  // choice is cleared.
-  useEffect(() => {
-    const p = allowed.filter(canPick);
-    setDefaultProvider((cur) =>
-      p.length === 1 ? p[0] : cur && !p.includes(cur) ? "" : cur,
-    );
-  }, [allowed, canPick]);
-
   function toggle(p: string) {
     if (!canPick(p)) return;
     setAllowed((a) => (a.includes(p) ? a.filter((x) => x !== p) : [...a, p]));
@@ -275,7 +264,8 @@ function CreateKeyForm({
         label: label.trim(),
         allowed_providers: picked,
         allow_live: willBeLive,
-        default_provider: picked.includes(defaultProvider) ? defaultProvider : null,
+        // single-provider key → callers can send bare model names; multi → require provider/model
+        default_provider: picked.length === 1 ? picked[0] : null,
         monthly_budget_usd: budget.trim() ? Number(budget) : null,
         budget_period: budgetPeriod,
         budget_start: budgetPeriod === "custom" ? budgetStart || null : null,
@@ -329,33 +319,27 @@ function CreateKeyForm({
               );
             })}
           </div>
-          {noneConfigured && (
+          {noneConfigured ? (
             <p className="mt-1 text-[11px] text-fg-subtle">
               No provider keys configured. Add one (a server env var, or under{" "}
               <strong>Live provider keys</strong>) to create keys for it.
             </p>
+          ) : (
+            <p className="mt-1 text-[10px] text-fg-subtle">
+              {picked.length === 1 ? (
+                <>
+                  Callers can send bare model names (e.g. <code>gpt-4o</code>) on{" "}
+                  <code>/v1/chat/completions</code>.
+                </>
+              ) : (
+                <>
+                  Multi-provider key — callers send <code>provider/model</code> (e.g.{" "}
+                  <code>openai/gpt-4o</code>).
+                </>
+              )}
+            </p>
           )}
         </div>
-
-        <label className="block text-xs font-medium text-fg-muted">
-          Default provider
-          <select
-            className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
-            value={defaultProvider}
-            onChange={(e) => setDefaultProvider(e.target.value)}
-          >
-            <option value="">none — callers must send provider/model</option>
-            {picked.map((p) => (
-              <option key={p} value={p}>
-                {p}
-              </option>
-            ))}
-          </select>
-          <span className="mt-1 block text-[10px] font-normal text-fg-subtle">
-            Fills in the provider for a bare model name on <code>/v1/chat/completions</code>{" "}
-            (e.g. <code>gpt-4o</code>). Callers can prefix <code>provider/model</code> to override.
-          </span>
-        </label>
 
         <div className="grid grid-cols-2 gap-2">
           <label className="text-xs font-medium text-fg-muted">
