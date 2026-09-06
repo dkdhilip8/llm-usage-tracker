@@ -151,10 +151,9 @@ export function LiveKeysCard({ onChange }: { onChange: () => void }) {
     <Card title="Live provider keys">
       <div className="space-y-3 text-sm">
         <p className="text-xs text-fg-muted">
-          Paste your own OpenAI / Anthropic / OpenRouter key. Virtual keys you mark{" "}
-          <strong>Allow live calls</strong> then hit the real provider on your key and are
-          billed to you, stopping at your monthly cap. Only the last 4 digits are ever shown
-          back.
+          Paste your own OpenAI / Anthropic / OpenRouter / Gemini key. Virtual keys for a
+          provider you've configured here then hit the real provider on your key and are billed
+          to you, stopping at your monthly cap. Only the last 4 digits are ever shown back.
         </p>
 
         <ul className="space-y-1.5">

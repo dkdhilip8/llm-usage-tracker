@@ -216,7 +216,6 @@ function CreateKeyForm({
 }) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>([]);
-  const [allowLive, setAllowLive] = useState(false);
   const [defaultProvider, setDefaultProvider] = useState("");
   const [budget, setBudget] = useState("");
   const [budgetPeriod, setBudgetPeriod] = useState<BudgetPeriod>("month");
@@ -234,18 +233,14 @@ function CreateKeyForm({
   );
   const picked = allowed.filter(canPick); // selections that actually count
   const noneConfigured = configuredProviders.length === 0;
-  // every picked provider is configured, so live mode is available whenever at
-  // least one provider is on the key.
-  const liveReady = picked.length > 0;
+  // a new key makes live calls whenever it has at least one configured provider;
+  // it falls back to simulated automatically otherwise (or if ENABLE_LIVE is off).
+  const willBeLive = picked.length > 0;
 
   // a per-key budget above the account's live cap is effectively clamped for live calls
   const budgetNum = budget.trim() ? Number(budget) : null;
   const budgetOverCap =
-    allowLive && liveCap != null && budgetNum != null && budgetNum > liveCap;
-
-  useEffect(() => {
-    if (!liveReady && allowLive) setAllowLive(false);
-  }, [liveReady, allowLive]);
+    willBeLive && liveCap != null && budgetNum != null && budgetNum > liveCap;
 
   // keep the selection valid as configured providers change: drop any that are no
   // longer pickable, and default to the first available one.
@@ -269,7 +264,7 @@ function CreateKeyForm({
       const res = await api.createKey({
         label: label.trim(),
         allowed_providers: picked,
-        allow_live: allowLive,
+        allow_live: willBeLive,
         default_provider: picked.includes(defaultProvider) ? defaultProvider : null,
         monthly_budget_usd: budget.trim() ? Number(budget) : null,
         budget_period: budgetPeriod,
@@ -400,28 +395,16 @@ function CreateKeyForm({
           </div>
         )}
 
-        <label
-          className={`flex items-center gap-2 text-sm ${
-            liveReady ? "text-fg-muted" : "cursor-not-allowed text-fg-subtle"
-          }`}
-        >
-          <input
-            type="checkbox"
-            checked={allowLive}
-            disabled={!liveReady}
-            onChange={(e) => setAllowLive(e.target.checked)}
-          />
-          Allow live calls
-          {liveReady ? (
-            <span className="text-xs text-fg-subtle">
-              (runs on the configured provider key, under the monthly cap)
-            </span>
+        <p className="text-[11px] text-fg-subtle">
+          {willBeLive ? (
+            <>
+              This key will make <strong>live calls</strong> on your provider key, under your
+              monthly cap. Pause it any time from the keys table below.
+            </>
           ) : (
-            <span className="text-xs text-fg-subtle">
-              — add a configured provider to this key first.
-            </span>
+            <>Add a configured provider above — until then this key runs simulated.</>
           )}
-        </label>
+        </p>
 
         {budgetOverCap && (
           <p className="text-[11px] text-amber-700 dark:text-amber-400">
@@ -668,9 +651,11 @@ export function Account() {
                         }
                         disabled={!keyLiveReady(k) && !k.allow_live}
                         title={
-                          keyLiveReady(k)
-                            ? "Toggle live calls for this key"
-                            : "No provider key for this key's providers — add one under Live provider keys"
+                          k.allow_live
+                            ? "Pause live calls for this key (runs simulated)"
+                            : keyLiveReady(k)
+                              ? "Resume live calls for this key"
+                              : "No provider key for this key's providers — add one under Live provider keys"
                         }
                         className={`rounded px-2 py-0.5 text-[11px] font-bold disabled:cursor-not-allowed disabled:opacity-50 ${
                           k.allow_live
@@ -678,7 +663,7 @@ export function Account() {
                             : "bg-fill text-fg-subtle"
                         }`}
                       >
-                        {k.allow_live ? "LIVE ✓" : "live ✗"}
+                        {k.allow_live ? "LIVE" : keyLiveReady(k) ? "paused" : "no key"}
                       </button>
                     )}
                   </td>
