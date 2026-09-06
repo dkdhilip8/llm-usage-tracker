@@ -13,7 +13,6 @@ os.environ["ADMIN_USERNAME"] = "tester"
 os.environ["ADMIN_PASSWORD"] = "test-password-1234"
 os.environ["SECRET_KEY"] = "test-secret"
 os.environ["ENABLE_LIVE"] = "false"
-os.environ["SEED_DEMO_DATA"] = "false"
 os.environ["SIMULATE_LATENCY_SLEEP"] = "false"
 os.environ["LOG_BODIES"] = "true"
 os.environ["ALLOW_DB_PROVIDER_KEYS"] = "true"  # dev-only feature, exercised in tests
@@ -80,7 +79,7 @@ def _clean_tables():
             )
         )
         s.commit()
-        bootstrap(s)  # recreate the admin + demo user rows
+        bootstrap(s)  # recreate the admin user row
     _p._db_keys.clear()  # drop stale decrypted-key cache between tests
     _p._cache.clear()
     from app.gateway import _pg_hits

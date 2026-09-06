@@ -5,7 +5,6 @@ import {
   type KeyInspect,
   type ModelInfo,
 } from "../lib/api";
-import { useAuth } from "../lib/auth";
 import { Card } from "../components/Card";
 import { usd } from "../lib/format";
 
@@ -13,7 +12,6 @@ const DEFAULT_PROMPT =
   "In two sentences, explain what an LLM gateway does and why usage tracking matters.";
 
 export function Playground() {
-  const { authenticated } = useAuth();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [key, setKey] = useState("");
   const [inspect, setInspect] = useState<KeyInspect | null>(null);
@@ -79,7 +77,7 @@ export function Playground() {
   if (currentProvider && currentMode === "simulated") {
     if (!liveEnabled) simReason = "server has ENABLE_LIVE off";
     else if (!inspect?.allow_live)
-      simReason = 'this key is not "allow live" — toggle it in Admin';
+      simReason = 'this key is not "allow live" — toggle it on the Account page';
     else if (!currentProvider.configured)
       simReason = `${provider} has no server API key configured`;
     else if (!currentProvider.valid)
@@ -101,22 +99,6 @@ export function Playground() {
 
   const ready = Boolean(key.trim() && inspect && provider && model && prompt.trim());
 
-  // The Playground sends requests through the gateway (it writes usage_logs and
-  // needs a vk_ key), so it requires a signed-in account.
-  if (!authenticated) {
-    return (
-      <div className="mx-auto max-w-md">
-        <Card title="Playground">
-          <p className="text-sm text-fg-muted">
-            The Playground sends requests through the gateway, so you need to{" "}
-            <strong>sign in</strong> first. The <strong>Dashboard</strong> and{" "}
-            <strong>Requests</strong> tabs are open to everyone.
-          </p>
-        </Card>
-      </div>
-    );
-  }
-
   return (
     <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
       <Card title="Send a request">
@@ -125,7 +107,7 @@ export function Playground() {
             Virtual key
             <input
               className="mt-1 w-full rounded-md border border-line px-2 py-1.5 font-mono text-xs"
-              placeholder="vk_…  (create one in Admin)"
+              placeholder="vk_…  (create one on the Account page)"
               value={key}
               onChange={(e) => setKey(e.target.value)}
             />

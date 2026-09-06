@@ -1,6 +1,6 @@
-"""Configured (demo) token pricing. NOT live provider pricing — these are
-illustrative numbers, editable in one place, surfaced read-only at GET /api/models.
-USD per 1,000,000 tokens."""
+"""Configured token pricing — a hand-maintained fallback price table used to
+estimate cost when the provider doesn't report one. Editable in one place,
+surfaced read-only at GET /api/models. USD per 1,000,000 tokens."""
 
 Pricing = dict[str, float]
 

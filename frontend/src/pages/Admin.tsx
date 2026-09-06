@@ -184,8 +184,8 @@ function ProviderPanel() {
           {dbKeys ? (
             <p>
               Otherwise a key pasted here is stored <strong>AES-encrypted</strong> in the
-              database (only its last 4 digits are ever shown back). This is a local /
-              non-production convenience — the public deploy uses env vars only.
+              database (only its last 4 digits are ever shown back). This is a
+              non-production convenience — deployed environments use env vars only.
             </p>
           ) : (
             <p>
@@ -455,65 +455,18 @@ function CreateKeyForm({
   );
 }
 
-function DemoTools({ onChange }: { onChange: () => void }) {
-  const [msg, setMsg] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-
-  function reset() {
-    setBusy(true);
-    setMsg(null);
-    api
-      .resetDemo()
-      .then((r) => {
-        setMsg(`Rebuilt: ${r.keys} keys · ${r.usage_rows} rows · ${r.days} days.`);
-        onChange();
-      })
-      .catch((e: Error) => setMsg(e.message))
-      .finally(() => setBusy(false));
-  }
-
-  return (
-    <Card title="Demo tools">
-      <div className="space-y-2">
-        <button
-          onClick={() => {
-            if (
-              window.confirm(
-                "Reset the demo dataset? This deletes ALL keys and usage, then rebuilds " +
-                  "the shared ~30-day demo data.",
-              )
-            )
-              reset();
-          }}
-          disabled={busy}
-          className="rounded-md border border-line px-4 py-2 text-sm font-medium text-fg-muted hover:bg-fill disabled:opacity-50"
-        >
-          {busy ? "Rebuilding…" : "Reset demo dataset"}
-        </button>
-        {msg && <div className="text-xs text-fg-muted">{msg}</div>}
-        <p className="text-[11px] text-fg-subtle">
-          Wipes everything and regenerates the deterministic shared dataset (5 keys, ~30 days
-          of simulated usage) — this is the data every public visitor sees.
-        </p>
-      </div>
-    </Card>
-  );
-}
-
 function AccountTools({ onChange }: { onChange: () => void }) {
   const { logout } = useAuth();
   const [msg, setMsg] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
 
-  function run(kind: "sample" | "clear" | "delete") {
+  function run(kind: "clear" | "delete") {
     setBusy(kind);
     setMsg(null);
     const call =
-      kind === "sample"
-        ? api.regenerateSample().then((r) => `Rebuilt sample: ${r.keys} keys · ${r.usage_rows} rows.`)
-        : kind === "clear"
-          ? api.clearMyData().then(() => "Your keys and usage were cleared.")
-          : api.deleteAccount().then(() => "account-deleted");
+      kind === "clear"
+        ? api.clearMyData().then(() => "Your keys and usage were cleared.")
+        : api.deleteAccount().then(() => "account-deleted");
     call
       .then((m) => {
         if (m === "account-deleted") {
@@ -531,18 +484,11 @@ function AccountTools({ onChange }: { onChange: () => void }) {
     <Card title="Your data">
       <div className="flex flex-wrap gap-2">
         <button
-          onClick={() => run("sample")}
-          disabled={busy !== null}
-          className="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-        >
-          {busy === "sample" ? "Rebuilding…" : "Regenerate sample data"}
-        </button>
-        <button
           onClick={() => window.confirm("Delete all your keys and usage?") && run("clear")}
           disabled={busy !== null}
           className="rounded-md border border-line px-3 py-1.5 text-sm text-fg-muted hover:bg-fill disabled:opacity-50"
         >
-          Clear my data
+          {busy === "clear" ? "Clearing…" : "Clear my data"}
         </button>
         <button
           onClick={() =>
@@ -631,8 +577,6 @@ export function Account() {
         </div>
         <CreateKeyForm onCreated={refresh} configuredProviders={configured} />
       </div>
-
-      {isAdmin && <DemoTools onChange={refresh} />}
 
       <Card title={`Virtual keys (${keys.length})`}>
         <div className="overflow-x-auto">

@@ -27,11 +27,11 @@ _pg_hits: dict[int, deque[float]] = defaultdict(deque)
 
 
 def enforce_user_quota(db: Session, vk: VirtualKey) -> None:
-    """Per-account caps for signed-up users (admin + the demo account are exempt)."""
+    """Per-account caps for signed-up users (admin is exempt)."""
     if vk.user_id is None:
         return
     user = db.get(User, vk.user_id)
-    if user is None or user.is_admin or user.is_demo:
+    if user is None or user.is_admin:
         return
     now = time.time()
     q = _pg_hits[user.id]
@@ -256,7 +256,7 @@ def enforce_account_cap(db: Session, vk: VirtualKey) -> None:
     if not vk.allow_live or vk.user_id is None:
         return
     user = db.get(User, vk.user_id)
-    if user is None or user.is_admin or user.is_demo:
+    if user is None or user.is_admin:
         return
     cap = account_live_cap(db, vk.user_id)
     spent = live_spend_this_month(db, vk.user_id)
@@ -288,7 +288,7 @@ def run_completion(
             )
             latency_ms = int((time.perf_counter() - t0) * 1000)
             mode = "live"
-        except Exception as exc:  # fall back to simulated rather than 5xx the demo
+        except Exception as exc:  # fall back to simulated rather than 5xx
             text, pt, ct, latency_ms = simulate_chat(provider, model, prompt)
             text = f"[live call failed, simulated instead: {exc}] {text}"
             mode, actual_cost = "simulated", None

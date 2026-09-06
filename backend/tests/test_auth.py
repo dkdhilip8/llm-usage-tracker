@@ -50,8 +50,6 @@ def test_users_are_isolated(signup):
     ca, ua = signup("alice@example.com")
     cb, ub = signup("bob@example.com")
     assert ua["id"] != ub["id"]
-    ca.delete("/api/account/data")  # drop the seeded sample -> clean slate
-    cb.delete("/api/account/data")
 
     ca.post("/api/keys", json={"label": "alice key", "allowed_providers": ["openrouter"]})
     cb.post("/api/keys", json={"label": "bob key", "allowed_providers": ["openrouter"]})
@@ -70,13 +68,12 @@ def test_users_are_isolated(signup):
     assert cb.get("/api/usage/summary").json()["total_requests"] == 0
 
 
-def test_signup_seeds_a_sample_dataset(signup):
+def test_signup_starts_empty(signup):
     c, _ = signup()
     summary = c.get("/api/usage/summary").json()
-    assert summary["total_requests"] > 50  # sample data is there
-    assert summary["active_keys"] == 3
-    keys = c.get("/api/keys").json()
-    assert {k["label"] for k in keys} == {"My app", "Batch jobs", "Chat feature"}
+    assert summary["total_requests"] == 0
+    assert summary["active_keys"] == 0
+    assert c.get("/api/keys").json() == []
 
 
 def test_admin_sees_all_keys_with_owner(client, admin, signup):
@@ -109,10 +106,19 @@ def test_max_users_cap(client, monkeypatch):
 
 def test_account_data_controls(signup):
     c, _ = signup()
-    assert c.get("/api/usage/summary").json()["total_requests"] > 50
+    k = c.post(
+        "/api/keys", json={"label": "k", "allowed_providers": ["openrouter"]}
+    ).json()
+    c.post(
+        "/v1/proxy/chat",
+        json={"provider": "openrouter", "model": "m", "prompt": "hi"},
+        headers={"Authorization": f"Bearer {k['key']}"},
+    )
+    assert c.get("/api/usage/summary").json()["total_requests"] == 1
+
     assert c.delete("/api/account/data").status_code == 200
     assert c.get("/api/usage/summary").json()["total_requests"] == 0
-    assert c.post("/api/account/sample").json()["usage_rows"] > 50
-    assert c.get("/api/usage/summary").json()["total_requests"] > 50
+    assert c.get("/api/keys").json() == []
+
     assert c.delete("/api/account").status_code == 200
     assert c.get("/api/auth/me").json()["authenticated"] is False

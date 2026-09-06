@@ -10,21 +10,17 @@ def test_healthz(client):
     assert j["status"] == "ok" and j["live_enabled"] is False
 
 
-def test_protected_endpoints_reject_anonymous(client):
-    assert client.get("/api/keys").status_code == 401  # sign in required
+def test_read_endpoints_require_sign_in(client):
+    # dashboard + request log + key management all need a session; anon gets 401
+    assert client.get("/api/keys").status_code == 401
     assert (
         client.post(
             "/api/keys", json={"label": "x", "allowed_providers": ["openai"]}
         ).status_code
         == 401
     )
-    assert client.post("/api/demo/reset").status_code == 403  # admin only
-
-
-def test_public_endpoints_need_no_token(client):
-    # the shared demo: dashboard + request log are open to everyone
-    assert client.get("/api/usage/summary").status_code == 200
-    assert client.get("/api/requests").status_code == 200
+    assert client.get("/api/usage/summary").status_code == 401
+    assert client.get("/api/requests").status_code == 401
 
 
 def test_key_create_list_hides_secret(client, admin, make_key):

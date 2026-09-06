@@ -1,6 +1,6 @@
-"""Multi-tenant auth: public signup + login (users and the admin account),
-session cookie, logout, and `/me`. No email verification, no password reset —
-this is a demo. The X-Admin-Token header is a parallel admin credential."""
+"""Multi-tenant auth: signup + login (users and the admin account), session
+cookie, logout, and `/me`. No email verification or password reset yet. The
+X-Admin-Token header is a parallel admin credential."""
 
 import time
 from collections import defaultdict, deque
@@ -12,7 +12,6 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.demo import seed_user_sample
 from app.gateway import any_live_key
 from app.models import User
 from app.providers import SUPPORTED
@@ -87,11 +86,11 @@ def signup(body: Credentials, request: Request, resp: Response, db: Session = De
     email = body.email.strip().lower()
     _throttle_signup(request.client.host if request.client else "?")
 
-    real_users = db.scalar(
-        select(func.count()).select_from(User).where(User.is_admin.is_(False), User.is_demo.is_(False))
+    account_count = db.scalar(
+        select(func.count()).select_from(User).where(User.is_admin.is_(False))
     )
-    if (real_users or 0) >= settings.MAX_USERS:
-        raise HTTPException(503, "the demo is at capacity — try again later")
+    if (account_count or 0) >= settings.MAX_USERS:
+        raise HTTPException(503, "sign-ups are currently closed — try again later")
     if db.scalar(select(User.id).where(func.lower(User.email) == email)):
         raise HTTPException(409, "an account with that email already exists")
 
@@ -99,7 +98,6 @@ def signup(body: Credentials, request: Request, resp: Response, db: Session = De
     db.add(user)
     db.commit()
     db.refresh(user)
-    seed_user_sample(db, user.id)  # so the new dashboard isn't empty
     _set_cookie(resp, user.id)
     return _me(db, user)
 
@@ -111,7 +109,7 @@ def login(body: LoginBody, resp: Response, db: Session = Depends(get_db)) -> dic
     # allow signing in as admin with the bare ADMIN_USERNAME too
     if user is None and ident == settings.ADMIN_USERNAME.strip().lower():
         user = db.scalar(select(User).where(User.is_admin.is_(True)))
-    if user is None or user.is_demo or not verify_password(body.password, user.password_hash):
+    if user is None or not verify_password(body.password, user.password_hash):
         raise HTTPException(401, "invalid email or password")
     _set_cookie(resp, user.id)
     return _me(db, user)

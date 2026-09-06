@@ -1,24 +1,12 @@
-"""One-time-per-boot setup: a tiny schema migration (no Alembic in this project),
-the admin + demo user rows, and a backfill of pre-multi-tenant virtual keys."""
+"""One-time-per-boot setup: a tiny schema migration (no Alembic in this project)
+and the admin user row."""
 
-from sqlalchemy import select, text, update
+from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.models import User, VirtualKey
+from app.models import User
 from app.security import hash_password
-
-DEMO_EMAIL = "demo@llm-usage-tracker.local"
-
-
-def demo_user_id(db: Session) -> int:
-    uid = db.scalar(select(User.id).where(User.is_demo.is_(True)))
-    if uid is None:  # created by bootstrap(); this is a safety net
-        u = User(email=DEMO_EMAIL, password_hash="", is_demo=True)
-        db.add(u)
-        db.commit()
-        uid = u.id
-    return uid
 
 
 def _has_col(db: Session, table: str, col: str) -> bool:
@@ -82,16 +70,16 @@ def _migrate(db: Session) -> None:
         ProviderCredential.__table__.create(bind=db.get_bind(), checkfirst=True)
         db.commit()
 
+    # v3: drop the demo account + its fabricated shared dataset
+    if _has_col(db, "users", "is_demo"):
+        db.execute(text("DELETE FROM users WHERE is_demo = true"))  # cascades keys -> usage
+        db.commit()
+        db.execute(text("ALTER TABLE users DROP COLUMN IF EXISTS is_demo"))
+        db.commit()
+
 
 def bootstrap(db: Session) -> None:
     _migrate(db)
-
-    # demo account (owns the shared demo dataset; cannot log in)
-    demo = db.scalar(select(User).where(User.is_demo.is_(True)))
-    if demo is None:
-        demo = User(email=DEMO_EMAIL, password_hash="", is_demo=True)
-        db.add(demo)
-        db.flush()
 
     # admin account, from env
     admin = db.scalar(select(User).where(User.is_admin.is_(True)))
@@ -103,9 +91,4 @@ def bootstrap(db: Session) -> None:
         admin.email = email
         if settings.ADMIN_PASSWORD:
             admin.password_hash = pw_hash
-
-    # migration: adopt pre-multi-tenant keys into the demo account
-    db.execute(
-        update(VirtualKey).where(VirtualKey.user_id.is_(None)).values(user_id=demo.id)
-    )
     db.commit()

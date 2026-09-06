@@ -18,7 +18,7 @@ import { UsageByModelChart } from "../components/UsageByModelChart";
 import { KeyUsageTable } from "../components/KeyUsageTable";
 
 export function Dashboard() {
-  const { authenticated, isAdmin } = useAuth();
+  const { isAdmin } = useAuth();
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [summary, setSummary] = useState<UsageSummary | null>(null);
@@ -62,11 +62,7 @@ export function Dashboard() {
     api.usageByKey("").then(setAllKeys).catch(() => setAllKeys([]));
   }, []);
 
-  const scopeLabel = !authenticated
-    ? "demo data — sign in to see your own"
-    : isAdmin
-      ? "all accounts"
-      : "your account";
+  const scopeLabel = isAdmin ? "all accounts" : "your account";
 
   return (
     <div className="space-y-4">

@@ -10,7 +10,7 @@ from starlette.types import Scope
 from app import providers
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.routers import account, auth, demo, keys, openai_compat, proxy, usage
+from app.routers import account, auth, keys, openai_compat, proxy, usage
 from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
@@ -38,18 +38,14 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         from app.bootstrap import bootstrap
 
-        bootstrap(db)  # admin + demo users, backfill key ownership
+        bootstrap(db)  # schema migration + the admin user row
         providers.load_db_keys(db)  # decrypt any admin-entered provider keys
-        if settings.SEED_DEMO_DATA:
-            from app.demo import seed_if_empty
-
-            seed_if_empty(db)
     providers.warm_cache()  # best-effort liveness check for any configured provider
     yield
 
 
 app = FastAPI(
-    title="LLM Usage Tracker (Demo)",
+    title="LLM Usage Tracker",
     version=settings.VERSION,
     lifespan=lifespan,
 )
@@ -81,7 +77,6 @@ app.include_router(proxy.router)
 app.include_router(openai_compat.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)
-app.include_router(demo.router)
 app.include_router(usage.router)
 
 

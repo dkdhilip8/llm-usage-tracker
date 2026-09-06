@@ -3,7 +3,7 @@ const BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
-    credentials: "include", // carry the admin session cookie
+    credentials: "include", // carry the session cookie
     headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
   if (!res.ok) {
@@ -217,10 +217,6 @@ export const api = {
   logout: () => req<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
 
   // ---- account self-service ----
-  regenerateSample: () =>
-    req<{ keys: number; usage_rows: number; days: number }>("/api/account/sample", {
-      method: "POST",
-    }),
   clearMyData: () => req<{ cleared: boolean }>("/api/account/data", { method: "DELETE" }),
   deleteAccount: () => req<{ deleted: boolean }>("/api/account", { method: "DELETE" }),
 
@@ -235,12 +231,6 @@ export const api = {
     ),
   clearAccountProviderKey: (provider: string) =>
     req<{ provider: string }>(`/api/account/providers/${provider}/key`, { method: "DELETE" }),
-
-  // admin-only demo-data control (session cookie carries auth)
-  resetDemo: () =>
-    req<{ keys: number; usage_rows: number; days: number }>("/api/demo/reset", {
-      method: "POST",
-    }),
 
   providers: (refresh = false) =>
     req<ProviderStatus[]>(`/api/providers${refresh ? "?refresh=true" : ""}`),
@@ -259,7 +249,6 @@ export const api = {
   usageByKey: (qs: string) => req<ByKeyRow[]>(`/api/usage/by-key${qs}`),
   usageByModel: (qs: string) => req<ByModelRow[]>(`/api/usage/by-model${qs}`),
 
-  // public, read-only
   listRequests: (qs: string) =>
     req<{ items: RequestRow[]; next_cursor: number | null; bodies_logged: boolean }>(
       `/api/requests${qs}`,

@@ -1,6 +1,6 @@
-"""Deterministic LLM simulator. Given (provider, model, prompt) it always returns
-the same response, token counts and latency, so demos and screenshots are stable.
-No network, no provider SDKs, no cost."""
+"""Deterministic LLM simulator for dry-run mode. Given (provider, model, prompt)
+it always returns the same response, token counts and latency, so results are
+reproducible. No network, no provider SDKs, no cost."""
 
 import hashlib
 import random

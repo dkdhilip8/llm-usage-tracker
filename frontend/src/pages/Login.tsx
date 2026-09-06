@@ -34,8 +34,8 @@ export function Login() {
       <Card title={mode === "signup" ? "Create an account" : "Sign in"}>
         <p className="mb-3 text-sm text-fg-muted">
           {mode === "signup"
-            ? "You get your own virtual keys, Playground, and a private dashboard with a sample dataset to start from."
-            : "The Dashboard and Requests tabs are open to everyone (they show demo data). Sign in for your own."}
+            ? "Create your own virtual keys, mint them for teammates, and track usage and cost on a private dashboard."
+            : "Sign in to manage your virtual keys, use the Playground, and see your usage and cost."}
         </p>
         <form onSubmit={submit} className="space-y-3">
           <label className="block text-xs font-medium text-fg-muted">
@@ -86,7 +86,7 @@ export function Login() {
             : "New here? Create an account"}
         </button>
         <p className="mt-3 text-[11px] text-fg-subtle">
-          Demo only — no email verification, no password reset. Don't reuse a real password.
+          No email verification or password reset yet — use a unique password.
         </p>
       </Card>
     </div>

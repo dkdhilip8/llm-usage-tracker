@@ -1,1 +1,1 @@
-# LLM Usage Tracker (demo) — backend package
+# LLM Usage Tracker — backend package

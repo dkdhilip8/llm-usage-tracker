@@ -1,5 +1,5 @@
-# Render blueprint. Recommended: this web service + a free Neon Postgres project.
-# Paste the Neon pooled connection string into DATABASE_URL after the first deploy.
+# Render blueprint: this web service + a Neon Postgres project.
+# Paste the Neon connection string into DATABASE_URL after the first deploy.
 services:
   - type: web
     name: llm-usage-tracker
@@ -24,16 +24,13 @@ services:
         value: admin
       - key: ADMIN_PASSWORD
         generateValue: true
-      # Live upstream calls ARE enabled — but only for a virtual key whose owner
-      # has attached their OWN provider API key on the Account page, and only up
+      # Live upstream calls are enabled — but only for a virtual key whose owner
+      # has attached their own provider API key on the Account page, and only up
       # to that account's monthly cap (<= $LIVE_CAP_MAX_USD). No server-side
-      # provider key is set here, so nothing is ever billed to the host.
+      # provider key is set below, so nothing is billed until someone attaches one.
       - key: ENABLE_LIVE
         value: "true"
-      # Populate the shared demo dataset on first boot (no-op once usage exists).
-      - key: SEED_DEMO_DATA
-        value: "true"
-      # Never store prompt/response bodies on the public deploy.
+      # Don't store prompt/response bodies by default.
       - key: LOG_BODIES
         value: "false"
       - key: OPENAI_API_KEY

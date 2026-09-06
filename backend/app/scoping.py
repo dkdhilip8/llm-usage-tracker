@@ -1,18 +1,14 @@
-"""Who-can-see-what for the read endpoints.
+"""Who-can-see-what for the read endpoints. Sign-in is required.
 
-Logged out -> the demo account's data.
-Signed in  -> only your own keys + usage.
-Admin      -> everything (`user_id` is None).
+Signed in -> only your own keys + usage.
+Admin     -> everything (`user_id` is None).
 """
 
 from dataclasses import dataclass
 
-from fastapi import Depends
+from fastapi import Depends, HTTPException
 from sqlalchemy import Select, select
-from sqlalchemy.orm import Session
 
-from app.bootstrap import demo_user_id
-from app.db import get_db
 from app.models import UsageLog, User, VirtualKey
 from app.security import current_user
 
@@ -20,19 +16,15 @@ from app.security import current_user
 @dataclass
 class Viewer:
     user_id: int | None  # scope to this owner; None = all (admin)
-    authenticated: bool
     is_admin: bool
-    email: str | None
 
 
-def viewer(
-    user: User | None = Depends(current_user), db: Session = Depends(get_db)
-) -> Viewer:
+def viewer(user: User | None = Depends(current_user)) -> Viewer:
     if user is None:
-        return Viewer(demo_user_id(db), False, False, None)
+        raise HTTPException(status_code=401, detail="sign in required")
     if user.is_admin:
-        return Viewer(None, True, True, user.email)
-    return Viewer(user.id, True, False, user.email)
+        return Viewer(None, True)
+    return Viewer(user.id, False)
 
 
 def scope_usage(stmt: Select, user_id: int | None) -> Select:

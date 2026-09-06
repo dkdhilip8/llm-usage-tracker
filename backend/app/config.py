@@ -9,8 +9,8 @@ _DEPLOYED_ENVS = {"production", "prod", "staging"}
 
 
 class Settings(BaseSettings):
-    """Runtime configuration. All values have demo-safe defaults so the app boots
-    with zero env vars for local experimentation."""
+    """Runtime configuration. All values have sensible defaults so the app boots
+    with zero env vars for local development."""
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -26,9 +26,9 @@ class Settings(BaseSettings):
     # Signed session-cookie lifetime.
     SESSION_TTL_HOURS: int = 168
 
-    # ---- public multi-tenant signup ----
+    # ---- multi-tenant signup + per-account abuse caps ----
     ALLOW_SIGNUP: bool = True
-    MAX_USERS: int = 300  # reject signup past this (protects the free DB)
+    MAX_USERS: int = 300  # reject signup past this many accounts
     SIGNUPS_PER_IP_PER_HOUR: int = 5
     MAX_KEYS_PER_USER: int = 10
     MAX_USAGE_ROWS_PER_USER: int = 4000  # proxy stops recording past this
@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     # A urlsafe-base64 32-byte Fernet key. Empty => derived from SECRET_KEY.
     ENCRYPTION_KEY: str = ""
     # Let an admin store provider API keys in the DB (encrypted) via the UI.
-    # HARD-BLOCKED in a deployed ENVIRONMENT — public deploys use server env vars only.
+    # HARD-BLOCKED in a deployed ENVIRONMENT — deployed hosts use server env vars only.
     ALLOW_DB_PROVIDER_KEYS: bool = False
 
     # Postgres. Render/Neon hand out `postgres://` or `postgresql://`; `sqlalchemy_url`
@@ -65,8 +65,9 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     GEMINI_API_KEY: str = ""  # Google AI Studio key; used via the OpenAI-compatible endpoint
 
-    # Master switch for live upstream calls. Default off keeps the public demo $0.
-    # Even when on, a request also needs key.allow_live + a configured & valid provider.
+    # Master switch for real upstream calls. Off => every request runs in dry-run
+    # (simulated) mode. Even when on, a request also needs key.allow_live + a
+    # configured & valid provider.
     ENABLE_LIVE: bool = False
 
     # Seconds to cache a provider liveness check.
@@ -76,15 +77,11 @@ class Settings(BaseSettings):
     # Off by default — request bodies can contain sensitive data.
     LOG_BODIES: bool = False
 
-    # Simulator sleeps to mimic real latency. Tests set this false for speed.
+    # In dry-run mode, sleep for the simulated latency so the Playground feels
+    # real. Tests set this false for speed.
     SIMULATE_LATENCY_SLEEP: bool = True
 
-    # On boot, if usage_logs is empty, generate the shared demo dataset (keys +
-    # ~30 days of simulated usage). Set true on the public deploy so a fresh
-    # database self-populates; false locally and in tests.
-    SEED_DEMO_DATA: bool = False
-
-    VERSION: str = "0.8.2"
+    VERSION: str = "0.9.0"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":

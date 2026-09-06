@@ -1,8 +1,7 @@
 """Request log — recent `usage_logs` rows for the Requests tab, scoped to the
-viewer (demo data when logged out, your own when logged in, all for admin).
+viewer (your own when signed in, all for admin; sign-in required).
 
-Prompt/response previews are only populated when LOG_BODIES=true, off on the
-public deploy."""
+Prompt/response previews are only populated when LOG_BODIES=true (off by default)."""
 
 from datetime import datetime
 

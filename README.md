@@ -1,55 +1,53 @@
-# LLM Usage Tracker — Demo
+# LLM Usage Tracker
 
-An **LLM gateway** demo: issue per-user virtual API keys with per-provider access control,
-send requests through the proxy, and watch a dashboard of per-user token usage and cost.
+An **LLM gateway**: issue per-user virtual API keys with per-provider access control, send
+requests through the proxy, and track per-user token usage and cost on a dashboard.
 OpenAI · Anthropic · OpenRouter · Google Gemini.
 
-> **Demo only — not for production.** **Simulated** by default (no real provider calls, no host
-> API keys, $0 to run). Real calls happen only when a user attaches **their own** provider key,
-> under a spend cap — see below.
+> **Dry-run by default.** With `ENABLE_LIVE=false` every request runs against a deterministic
+> simulator — no provider calls, no cost — so you can wire keys and dashboards up before any
+> real spend. Live calls are opt-in per key (see *Per-account live mode*).
 >
-> **Multi-tenant.** Anyone can **sign up** (email + password, scrypt-hashed) and gets their own
-> virtual keys, Playground, and a private dashboard seeded with a small sample dataset.
-> **Logged out**, the Dashboard / Requests tabs show a shared **demo** account's data
-> (read-only). **Logged in**, they show only *your* usage. One privileged **admin** account
-> (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for curl / SDK / CI) sees
-> everything and owns provider config + the demo-data reset.
+> **Multi-tenant.** Each person **signs up** (email + password, scrypt-hashed) and gets their
+> own virtual keys, a Playground, and a private dashboard scoped to their usage. Sign-in is
+> required — Dashboard / Requests / Playground / Account all need a session. One privileged
+> **admin** account (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for
+> curl / SDK / CI) sees every account's keys + usage and owns server-side provider config.
 >
-> **Per-account live mode.** On the Account page a signed-in user pastes their **own**
-> OpenAI/Anthropic/OpenRouter/Gemini key (encrypted at rest, shown back only as `····last4`) and sets a
-> monthly spend cap. Their virtual keys can then be flagged **allow live** and make real upstream
-> calls billed to that key, blocked once the month's live spend hits the cap (default
-> `LIVE_CAP_DEFAULT_USD`, hard ceiling `LIVE_CAP_MAX_USD` = $10). They copy the raw `vk_…` strings
-> and hand them to whoever needs them — **recipients need no account**. Users with no attached key
-> stay **simulated**. The host sets no server-side provider key, so nothing is billed to the
-> deployment.
+> **Per-account live mode.** On the Account page a signed-in user attaches their **own**
+> OpenAI/Anthropic/OpenRouter/Gemini key (encrypted at rest, shown back only as `····last4`) and
+> sets a monthly spend cap. Their virtual keys can then be flagged **allow live** and make real
+> upstream calls billed to that key, blocked once the month's live spend hits the cap (default
+> `LIVE_CAP_DEFAULT_USD`, hard ceiling `LIVE_CAP_MAX_USD` = $10). They copy the raw `vk_…`
+> strings and hand them to whoever needs them — **recipients need no account**. A key with no
+> configured provider stays **simulated**.
 >
-> Abuse controls for the public database: `MAX_USERS`, signups/IP/hour, per-account caps on keys /
-> stored usage rows / requests-per-hour, and the server-enforced per-account live-spend cap. No
-> email verification, no password reset — it's a demo.
+> **Abuse controls:** `MAX_USERS`, signups/IP/hour, per-account caps on keys / stored usage
+> rows / requests-per-hour, and the server-enforced per-account live-spend cap. No email
+> verification or password reset yet.
 >
-> **Provider keys** normally come from server env vars only. Locally / non-prod an admin can set
+> **Provider keys** normally come from server env vars only. Outside production an admin can set
 > `ALLOW_DB_PROVIDER_KEYS=true` and paste keys in the UI — stored **AES-encrypted** in the DB,
 > shown back only as `····last4`, always overridden by an env var for the same provider.
 > **Hard-blocked when `ENVIRONMENT` is deployed.**
 >
 > **Cost**: for **live OpenRouter** calls it's the provider's *actual* charge (`usage.cost` from
-> the response). OpenAI/Anthropic/Gemini don't return a per-request cost, so those (and all simulated
-> calls) are **estimated** as tokens × a hand-maintained price table. Each row records which:
-> `cost_source` = `provider` or `configured`. The dashboard shows the actual/estimated split.
+> the response). OpenAI/Anthropic/Gemini don't return a per-request cost, so those (and all
+> simulated calls) are **estimated** as tokens × a hand-maintained price table. Each row records
+> which: `cost_source` = `provider` or `configured`. The dashboard shows the actual/estimated
+> split.
 >
-> Real provider calls are wired but **off by default**. A request only hits a real provider when
-> `ENABLE_LIVE=true` **and** the virtual key has `allow_live` **and** that provider's server-side
-> key is configured and passes a liveness check. Otherwise it falls back to simulated — the
-> public deployment keeps `ENABLE_LIVE=false`.
+> A request only hits a real provider when `ENABLE_LIVE=true` **and** the virtual key has
+> `allow_live` **and** that provider's key is configured and passes a liveness check. Otherwise
+> it runs simulated.
 
 ```
-Browser → React (Dashboard · Requests — public)  +  (Playground · Account — signed in)
+Browser → React (Dashboard · Requests · Playground · Account — sign-in required)
         → FastAPI gateway
             → virtual-key auth  →  per-key provider ACL  →  per-key monthly budget
-            → simulator (default)  |  real provider call (gated)   [JSON or SSE stream]
-        → PostgreSQL (virtual_keys, allowed_providers, usage_logs) — one shared dataset
-        → dashboard aggregates + request log (public reads) · demo reset (admin write)
+            → simulator (dry run)  |  real provider call (gated)   [JSON or SSE stream]
+        → PostgreSQL (users, virtual_keys, allowed_providers, usage_logs)
+        → dashboard aggregates + request log, scoped per account
 ```
 
 - **OpenAI-compatible** — point any OpenAI SDK at `/v1`:
@@ -69,8 +67,8 @@ Browser → React (Dashboard · Requests — public)  +  (Playground · Account 
 - **DB:** PostgreSQL 16
 - **Deploy:** one Docker image (FastAPI serves the built SPA) + one managed Postgres
 - **CI config:** [`.github/workflows/ci.yml`](.github/workflows/ci.yml) defines ruff + pytest
-  (Postgres service), tsc + vitest + build, and `docker build`. Not yet enabled on the remote —
-  push it once the repo has GitHub Actions access.
+  (Postgres service), tsc + vitest + build, and `docker build`. It is not committed yet — push
+  it once the repo has GitHub Actions access (`gh auth refresh -h github.com -s workflow`).
 
 ---
 
@@ -89,17 +87,14 @@ docker compose up --build
 | API docs  | http://localhost:8000/docs   |
 | Adminer   | `docker compose --profile tools up` → http://localhost:8080 (server `db`, user/pass `llm`) |
 
-On first boot the backend creates the schema (`SEED_DEMO_DATA=false` locally). Demo flow:
+On first boot the backend creates the schema and the admin user. First run:
 
-1. **Dashboard / Requests** — open with no sign in. They show the shared **demo** account's
-   data: summary + charts + latency/error metrics and the per-request log. (Empty until an
-   admin seeds it — step 3.)
-2. **Sign in → Create an account** — you land on **/account** with 3 seeded sample keys and a
-   private dashboard. Open **Playground**, paste one of *your* `vk_…` keys, send requests — they
-   show up only on *your* Dashboard/Requests, not other users' or the demo's.
-3. **Admin** (`admin` / `dev-password` under docker-compose) → **Demo tools → Reset demo
-   dataset** builds the shared logged-out dataset (5 keys, ~30 days of simulated usage).
-   Admin's Dashboard shows *all* accounts; the keys table gains an Owner column.
+1. **Create an account** at `/login` → you land on **/account** with an empty dashboard.
+2. **Create a virtual key** (pick its allowed providers, optional budget), copy the `vk_…`
+   string, then open **Playground**, paste it, and send a request. With `ENABLE_LIVE=false` it
+   runs simulated; the request shows up on *your* Dashboard and Requests.
+3. Sign in as **admin** (`admin` / `dev-password` under docker-compose) to see *all* accounts'
+   keys + usage — the keys table gains an Owner column — and manage server-side provider keys.
 
 Reset everything (wipes the DB):
 
@@ -117,20 +112,15 @@ ruff check app tests
 cd ../frontend && npm ci && npm run typecheck && npm test
 ```
 
-`.github/workflows/ci.yml` runs all of the above plus `docker build`. It is committed but
-**not yet active on the remote** — enable GitHub Actions on the repo and push the workflow
-(`gh auth refresh -h github.com -s workflow`) to turn it on.
+`.github/workflows/ci.yml` runs all of the above plus `docker build` once committed.
 
 ### Smoke test
 
 ```bash
 BASE=http://localhost:8000
 curl -s $BASE/healthz
-# public reads — no token
-curl -s $BASE/api/usage/summary
-curl -s $BASE/api/requests
-# admin mutation without a token -> 403
-curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE/api/demo/reset
+# read endpoints require a session -> 401 for anon
+curl -s -o /dev/null -w '%{http_code}\n' $BASE/api/usage/summary
 # provider config status (admin)
 curl -s $BASE/api/providers -H 'X-Admin-Token: dev-admin-token'
 # create a key scoped to openai + openrouter
@@ -141,7 +131,7 @@ KEY=$(curl -s -X POST $BASE/api/keys -H 'X-Admin-Token: dev-admin-token' \
 # allowed provider -> simulated response + usage
 curl -s -X POST $BASE/v1/proxy/chat -H "Authorization: Bearer $KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"provider":"openai","model":"gpt-4o-mini","prompt":"hello from the demo"}'
+  -d '{"provider":"openai","model":"gpt-4o-mini","prompt":"hello"}'
 # provider not on the key -> 403
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE/v1/proxy/chat \
   -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' \
@@ -149,53 +139,42 @@ curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE/v1/proxy/chat \
 # no key -> 401
 curl -s -o /dev/null -w '%{http_code}\n' -X POST $BASE/v1/proxy/chat \
   -H 'Content-Type: application/json' -d '{"provider":"openai","model":"gpt-4o","prompt":"x"}'
-curl -s "$BASE/api/usage/summary"
+curl -s $BASE/api/usage/summary -H 'X-Admin-Token: dev-admin-token'
 ```
 
 ---
 
-## Deploy (100% free — the full cost breakdown)
+## Deploy (Render + Neon)
 
-| Item | Provider | Cost | Card? |
-|---|---|---|---|
-| Container web service | Render **Free** web service (Docker) | $0 | No |
-| PostgreSQL | Neon **Free** plan (permanent, 0.5 GB) | $0 | No |
-| Repo + blueprint | GitHub public repo | $0 | No |
-| Public URL | `*.onrender.com` subdomain | $0 | No |
-| Warmup pings | UptimeRobot / cron-job.org / GitHub Actions cron | $0 | No |
-| LLM usage | simulated by default; a user's live calls bill **their own** attached provider key (capped) — never the host | $0 to run | No |
+One Docker web service (FastAPI serves the built SPA) + one managed Postgres. It runs on the
+Render and Neon free tiers; the only catch is a ~30–60 s cold start after 15 min idle (Render)
+and a ~300 ms cold DB wake (Neon).
 
-The only "cost" of the free tier is a ~30–60 s cold start after 15 min idle (Render) and a
-~300 ms cold DB wake (Neon).
+### Steps
 
-### Steps (Render + Neon)
-
-1. Create a **Neon** project (free) → copy the connection string.
+1. Create a **Neon** project → copy the connection string.
 2. Push this repo to GitHub.
 3. Render → **New → Blueprint** → select the repo. It reads `render.yaml` and creates the
    Docker web service with `ENVIRONMENT=production` and generated `ADMIN_TOKEN` / `SECRET_KEY` /
    `ADMIN_PASSWORD` (the app refuses to boot on the dev defaults, or without a ≥12-char
    `ADMIN_PASSWORD`, once `ENVIRONMENT` is deployed). Creating the service by hand instead? Set
    `ENVIRONMENT`, `ADMIN_TOKEN`, `SECRET_KEY`, `ADMIN_PASSWORD` yourself.
-4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy. `render.yaml`
-   sets `SEED_DEMO_DATA=true`, so first boot builds the shared demo dataset automatically —
-   every visitor sees it immediately, no manual step needed.
-5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. Dashboard and
-   Requests are public (demo data); anyone can **sign up** for their own. Sign in as **admin**
-   with `admin` + the generated `ADMIN_PASSWORD` (Render → service → Environment) to reset the
-   demo data and see all accounts.
+4. Set `DATABASE_URL` on the service to the Neon connection string, then deploy.
+5. Open `https://<service>.onrender.com/healthz` → `{"status":"ok",...}`. **Sign up** for an
+   account, or sign in as **admin** with `admin` + the generated `ADMIN_PASSWORD` (Render →
+   service → Environment) to see all accounts and manage server-side provider keys.
 
 **All-Render fallback:** uncomment the `databases:` block in `render.yaml`. Note Render's free
 Postgres is deleted 30 days after creation; the schema is recreated automatically but any keys
 and usage you added are lost.
 
-### Keep it warm before a demo
+### Keeping it warm
 
 ```bash
 curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" https://<service>.onrender.com/healthz
 ```
 
-Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
+Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 
 ---
 
@@ -208,8 +187,8 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | `ADMIN_TOKEN` | `dev-admin-token` | `X-Admin-Token` header credential (curl / SDK / CI). Must be overridden when `ENVIRONMENT` is deployed. |
 | `ADMIN_USERNAME` / `ADMIN_PASSWORD` | `admin` / `""` | Admin login form. Empty password ⇒ password login disabled (token still works). `ADMIN_PASSWORD` required (≥12 chars) when `ENVIRONMENT` is deployed. |
 | `SESSION_TTL_HOURS` | `168` | Session-cookie lifetime (users + admin). |
-| `ALLOW_SIGNUP` | `true` | Public account creation. |
-| `MAX_USERS` | `300` | Signup is refused past this many real accounts (protects the free DB). |
+| `ALLOW_SIGNUP` | `true` | Whether new accounts can be created. |
+| `MAX_USERS` | `300` | Signup is refused past this many accounts. |
 | `SIGNUPS_PER_IP_PER_HOUR` | `5` | In-process signup throttle per client IP. |
 | `MAX_KEYS_PER_USER` | `10` | Virtual-key cap per non-admin account. |
 | `MAX_USAGE_ROWS_PER_USER` | `4000` | The proxy stops recording once an account hits this. |
@@ -219,21 +198,21 @@ Or point a free UptimeRobot / cron-job.org monitor at `/healthz` every 10 minute
 | `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing **and** session-cookie signing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` | `""` | Server-side provider creds. Always win over a DB-stored key. Never shown in the UI. Gemini uses Google's OpenAI-compatible endpoint. |
-| `ALLOW_DB_PROVIDER_KEYS` | `false` | Let the Admin UI store provider keys (AES-encrypted) in the DB. Convenience for local / non-prod — **hard-blocked when `ENVIRONMENT` is deployed**. |
+| `ALLOW_DB_PROVIDER_KEYS` | `false` | Let the Admin UI store provider keys (AES-encrypted) in the DB. Convenience for non-production — **hard-blocked when `ENVIRONMENT` is deployed**. |
 | `ENCRYPTION_KEY` | `""` | Fernet key (urlsafe-base64, 32 bytes) for that encryption. Empty ⇒ derived from `SECRET_KEY`. |
-| `ENABLE_LIVE` | `false` | Master switch for real upstream calls. `true` on the deploy — but a request still needs its virtual key flagged `allow_live` **and** the owning account to have attached its own provider key, and it stops at that account's monthly cap. |
+| `ENABLE_LIVE` | `false` | Master switch for real upstream calls. When off, every request runs simulated. When on, a request still needs its virtual key flagged `allow_live` **and** a configured provider key, and it stops at the owning account's monthly cap. |
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
-| `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the (public) Requests tab. Off by default and on the public deploy — bodies can be sensitive. |
-| `SIMULATE_LATENCY_SLEEP` | `true` | Simulator sleeps to mimic real latency. Tests set `false`. |
-| `SEED_DEMO_DATA` | `false` | On boot, if `usage_logs` is empty, build the shared demo dataset (same as *Admin → Demo tools → Reset demo dataset*). `true` on the public deploy so a fresh database self-populates; never overwrites existing data. |
+| `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the Requests tab. Off by default — bodies can be sensitive. |
+| `SIMULATE_LATENCY_SLEEP` | `true` | In dry-run mode, sleep for the simulated latency. Tests set `false`. |
 
 ---
 
 ## API
 
 Auth = a valid session cookie (`POST /api/auth/{signup,login}`) **or** the `X-Admin-Token` header
-(→ the admin user). "user" below = any signed-in account; "admin" = the privileged one. Read
-endpoints are **viewer-scoped**: logged out → the demo account; user → their own; admin → all.
+(→ the admin user). "user" below = any signed-in account; "admin" = the privileged one. Every
+`/api/*` endpoint below needs a session. Read endpoints are **viewer-scoped**: user → their own;
+admin → all.
 
 | Method | Path | Auth | Purpose |
 |---|---|---|---|
@@ -241,42 +220,37 @@ endpoints are **viewer-scoped**: logged out → the demo account; user → their
 | GET | `/api/models` | — | configured pricing table (per provider/model) |
 | POST | `/api/auth/signup` `\|` `/login` | — | `{email, password}` → sets `httpOnly` session cookie, `{authenticated, user:{id,email,is_admin,can_live}}` |
 | POST `\|` GET | `/api/auth/logout` `\|` `/me` | — | clear the cookie / current principal |
-| POST `\|` DELETE `\|` DELETE | `/api/account/sample` `\|` `/api/account/data` `\|` `/api/account` | user | regenerate my sample data / wipe my keys+usage / delete my account |
+| DELETE `\|` DELETE | `/api/account/data` `\|` `/api/account` | user | wipe my keys+usage / delete my account |
 | GET `\|` PATCH | `/api/account` | user | my account (email, `can_live`, `live_cap_usd`, `live_spend_this_month`, per-provider status) / set `{live_cap_usd}` (clamped to `LIVE_CAP_MAX_USD`) |
 | PUT `\|` DELETE | `/api/account/providers/{provider}/key` | user | attach / clear **my own** encrypted provider key. `409` if a server env var is set for that provider |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured, valid, source, last4, checked_at}]` (`?refresh=true` to re-check) |
 | PUT `\|` DELETE | `/api/providers/{provider}/key` | admin | set / clear a DB-stored (encrypted) provider key. `404` unless `ALLOW_DB_PROVIDER_KEYS`; `409` if a server env var is set for that provider |
-| POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(needs an attached provider key), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
+| POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(needs a configured provider key), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
 | GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | user | list *your* keys (admin: all, + `owner_email`) / patch / revoke |
-| GET | `/api/requests` | — *(scoped)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
-| POST | `/api/demo/reset` | admin | wipe **all** keys + usage and rebuild the deterministic shared demo dataset (5 keys, ~30 days) — this is what every public visitor sees |
+| GET | `/api/requests` | user *(scoped)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
 | **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget, `403` provider not on key. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + per-provider `mode` (`simulated`/`live`) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
-| GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | — *(scoped)* | dashboard aggregates (`start,end,provider,model,key_id`); `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
+| GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | user *(scoped)* | dashboard aggregates (`start,end,provider,model,key_id`); `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
 
-Public endpoints are read-only demo data — `LOG_BODIES=false` on the public deploy keeps prompt/
-response previews out of `/api/requests` regardless. Every other write (auth aside — login just
-mints a cookie) requires admin auth, and the proxy (`/v1/*`) requires a `vk_…` key that only the
-admin can mint — so a public visitor has no path to modify the shared dataset.
+Every `/api/*` route requires a session cookie or the `X-Admin-Token` header; read routes are
+viewer-scoped (user → their own, admin → all). The proxy (`/v1/*`) requires a `vk_…` key.
 
 ---
 
 ## Data model
 
-- **users** — `id, email (unique), password_hash (scrypt), is_admin, is_demo, live_cap_usd,
-  created_at`. The admin row is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot;
-  the demo row owns the shared logged-out dataset and can't log in. Sessions are a stateless
-  HMAC-signed cookie carrying the user id. `live_cap_usd` NULL ⇒ `LIVE_CAP_DEFAULT_USD` applies;
-  `enforce_account_cap` blocks the account's live calls once the calendar month's `mode='live'`
-  spend hits it.
+- **users** — `id, email (unique), password_hash (scrypt), is_admin, live_cap_usd, created_at`.
+  The admin row is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot. Sessions are a
+  stateless HMAC-signed cookie carrying the user id. `live_cap_usd` NULL ⇒ `LIVE_CAP_DEFAULT_USD`
+  applies; `enforce_account_cap` blocks the account's live calls once the calendar month's
+  `mode='live'` spend hits it.
 - **virtual_keys** — `id, user_id → users, label, key_hash, key_prefix, allow_live,
   default_provider, monthly_budget_usd, budget_period, budget_start, budget_end, created_at,
   last_used_at, revoked_at`. Only the HMAC hash and an 11-char prefix are stored; the raw key is
   shown once. Per-key **budget**: `$X` per `1 day` / `1 week` / `1 month` (rolling), or a
   `custom` fixed `[budget_start, budget_end]` range → `402` when spent. Keys don't expire —
-  revoke them explicitly. (`user_id` is added by a small boot-time migration on pre-multi-tenant
-  databases and backfilled to the demo account.)
+  revoke them explicitly.
 - **allowed_providers** — `(virtual_key_id, provider)`, unique. The per-key provider ACL enforced
   on every proxied request.
 - **usage_logs** — `id, key_id, request_id, provider, model, prompt_tokens, completion_tokens,
@@ -294,11 +268,8 @@ On a deployed environment, provider credentials live only in server env vars —
 never sent to the browser. `/api/providers` reports presence + liveness as booleans (+ `source`
 and `last4` when a DB key is in play locally).
 
-**The demo dataset is shared, not per-user.** `POST /api/demo/reset` (`app/demo.py`) deletes every
-row and deterministically rebuilds 5 keys (Engineering, Data Science, Support Bot, Content Team,
-Mobile App) with ~30 days of simulated traffic across all four providers, a weekday/weekend
-pattern, and a ~1.5% error rate. The demo keys' `key_hash` is random (`secrets.token_hex(32)`) and
-no raw key is ever produced — they exist only to own usage rows, not to authenticate anything.
+There is no Alembic. `app/bootstrap.py::_migrate` runs a few guarded `information_schema` checks
++ `ALTER TABLE`s on boot; `bootstrap()` also creates/updates the single admin user.
 
 ---
 

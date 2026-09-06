@@ -7,7 +7,7 @@ billed to that key, stopping at the cap. They hand the raw ``vk_...`` strings to
 whoever needs them — recipients need no account.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -16,9 +16,9 @@ from app.config import settings
 from app.crypto import encrypt
 from app.db import get_db
 from app.gateway import live_spend_this_month
-from app.models import ProviderCredential, User
+from app.models import ProviderCredential, User, VirtualKey
 from app.schemas import AccountOut, AccountPatch, AccountProviderStatus, ProviderKeyIn
-from app.security import require_user
+from app.security import SESSION_COOKIE, require_user
 
 router = APIRouter(prefix="/api/account", tags=["account"])
 
@@ -132,3 +132,28 @@ def clear_provider_key(
         db.delete(row)
         db.commit()
     return {"provider": provider}
+
+
+@router.delete("/data")
+def clear_my_data(
+    db: Session = Depends(get_db), user: User = Depends(require_user)
+) -> dict:
+    """Wipe the caller's virtual keys + usage (keeps the account)."""
+    # ON DELETE CASCADE on virtual_keys drops the user's usage_logs + allowed_providers
+    db.query(VirtualKey).filter(VirtualKey.user_id == user.id).delete(
+        synchronize_session=False
+    )
+    db.commit()
+    return {"cleared": True}
+
+
+@router.delete("")
+def delete_my_account(
+    resp: Response, db: Session = Depends(get_db), user: User = Depends(require_user)
+) -> dict:
+    if user.is_admin:
+        raise HTTPException(400, "the admin account cannot be deleted here")
+    db.delete(user)  # cascades keys + usage
+    db.commit()
+    resp.delete_cookie(SESSION_COOKIE, path="/")
+    return {"deleted": True}

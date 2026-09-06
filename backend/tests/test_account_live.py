@@ -54,7 +54,6 @@ def test_provider_key_is_per_account(signup):
 
 def test_allow_live_requires_a_provider_key(signup):
     c, _ = signup("live@example.com")
-    c.delete("/api/account/data")
 
     k = _mk_key(c, allow_live=True)
     assert k["allow_live"] is False  # no provider key yet -> forced simulated
@@ -69,7 +68,6 @@ def test_allow_live_requires_a_provider_key(signup):
 
 def test_allow_live_gated_on_the_keys_own_providers(signup):
     c, _ = signup("mismatch@example.com")
-    c.delete("/api/account/data")
     c.put("/api/account/providers/anthropic/key", json={"api_key": "sk-ant-mine-1234"})
 
     # only anthropic is configured; an openai-only key can't go live
@@ -134,7 +132,6 @@ def test_env_var_blocks_account_key(signup, monkeypatch):
 
 def test_live_spend_cap_enforced(signup):
     c, _ = signup("spend@example.com")
-    c.delete("/api/account/data")
     c.put("/api/account/providers/openrouter/key", json={"api_key": "sk-or-v1-teamkey"})
     c.patch("/api/account", json={"live_cap_usd": 1})
     k = _mk_key(c, allowed_providers=["openrouter"], allow_live=True)

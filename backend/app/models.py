@@ -31,10 +31,9 @@ class User(Base):
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     email: Mapped[str] = mapped_column(String, nullable=False, unique=True)  # login id
-    # "<salt_hex>$<scrypt_hex>", or "" for unusable (the demo account).
+    # "<salt_hex>$<scrypt_hex>", or "" when no password is set (header-token-only admin).
     password_hash: Mapped[str] = mapped_column(String, nullable=False, default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    is_demo: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Ceiling on this account's live (mode='live') spend per calendar month.
     # NULL => fall back to settings.LIVE_CAP_DEFAULT_USD.
     live_cap_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
@@ -47,7 +46,7 @@ class VirtualKey(Base):
     __tablename__ = "virtual_keys"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    # Owning account. Nullable for a smooth migration; backfilled to the demo user on boot.
+    # Owning account. Nullable only for the pre-multi-tenant migration path.
     user_id: Mapped[int | None] = mapped_column(
         BigInteger, ForeignKey("users.id", ondelete="CASCADE"), index=True
     )

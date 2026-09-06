@@ -249,7 +249,7 @@ def call_provider(
     if provider == "openrouter":
         headers = {
             **headers,
-            "HTTP-Referer": "https://llm-usage-tracker.demo",
+            "HTTP-Referer": "https://github.com/dkdhilip8/llm-usage-tracker",
             "X-Title": "LLM Usage Tracker",
         }
         body["usage"] = {"include": True}  # ask OpenRouter to return the real cost
@@ -285,7 +285,7 @@ def stream_openai_compatible(
     if provider == "openrouter":
         headers = {
             **headers,
-            "HTTP-Referer": "https://llm-usage-tracker.demo",
+            "HTTP-Referer": "https://github.com/dkdhilip8/llm-usage-tracker",
             "X-Title": "LLM Usage Tracker",
         }
         body["usage"] = {"include": True}
