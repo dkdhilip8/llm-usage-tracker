@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Navigate } from "react-router-dom";
 import {
   api,
@@ -215,7 +215,7 @@ function CreateKeyForm({
   configuredProviders?: string[];
 }) {
   const [label, setLabel] = useState("");
-  const [allowed, setAllowed] = useState<string[]>(["openai"]);
+  const [allowed, setAllowed] = useState<string[]>([]);
   const [allowLive, setAllowLive] = useState(false);
   const [defaultProvider, setDefaultProvider] = useState("");
   const [budget, setBudget] = useState("");
@@ -226,15 +226,35 @@ function CreateKeyForm({
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // A live call only works if one of the selected providers has a key behind it.
-  const liveReady = isAdmin || allowed.some((p) => configuredProviders.includes(p));
-  const missingLive = isAdmin ? [] : allowed.filter((p) => !configuredProviders.includes(p));
+  // You can only put a provider on a key once you've configured a key for it
+  // (a server env var or one attached under "Live provider keys"). Admin is exempt.
+  const canPick = useCallback(
+    (p: string) => isAdmin || configuredProviders.includes(p),
+    [isAdmin, configuredProviders],
+  );
+  const picked = allowed.filter(canPick); // selections that actually count
+  const noneConfigured = !isAdmin && configuredProviders.length === 0;
+  // every picked provider is configured (for non-admin), so live mode is available
+  // whenever at least one provider is on the key.
+  const liveReady = isAdmin || picked.length > 0;
 
   useEffect(() => {
     if (!liveReady && allowLive) setAllowLive(false);
   }, [liveReady, allowLive]);
 
+  // keep the selection valid as configured providers change: drop any that are no
+  // longer pickable, and default to the first available one.
+  useEffect(() => {
+    setAllowed((a) => {
+      const kept = a.filter(canPick);
+      if (kept.length) return kept.length === a.length ? a : kept;
+      const first = PROVIDERS.find(canPick);
+      return first ? [first] : a.length ? [] : a;
+    });
+  }, [canPick]);
+
   function toggle(p: string) {
+    if (!canPick(p)) return;
     setAllowed((a) => (a.includes(p) ? a.filter((x) => x !== p) : [...a, p]));
   }
 
@@ -243,9 +263,9 @@ function CreateKeyForm({
     try {
       const res = await api.createKey({
         label: label.trim(),
-        allowed_providers: allowed,
+        allowed_providers: picked,
         allow_live: allowLive,
-        default_provider: defaultProvider || null,
+        default_provider: picked.includes(defaultProvider) ? defaultProvider : null,
         monthly_budget_usd: budget.trim() ? Number(budget) : null,
         budget_period: budgetPeriod,
         budget_start: budgetPeriod === "custom" ? budgetStart || null : null,
@@ -278,17 +298,33 @@ function CreateKeyForm({
             Allowed providers
           </div>
           <div className="flex flex-wrap gap-3">
-            {PROVIDERS.map((p) => (
-              <label key={p} className="flex items-center gap-1.5 text-sm">
-                <input
-                  type="checkbox"
-                  checked={allowed.includes(p)}
-                  onChange={() => toggle(p)}
-                />
-                <span className="capitalize">{p}</span>
-              </label>
-            ))}
+            {PROVIDERS.map((p) => {
+              const ok = canPick(p);
+              return (
+                <label
+                  key={p}
+                  title={ok ? undefined : `Attach a ${p} key under "Live provider keys" first`}
+                  className={`flex items-center gap-1.5 text-sm ${
+                    ok ? "" : "cursor-not-allowed opacity-40"
+                  }`}
+                >
+                  <input
+                    type="checkbox"
+                    checked={allowed.includes(p)}
+                    disabled={!ok}
+                    onChange={() => toggle(p)}
+                  />
+                  <span className="capitalize">{p}</span>
+                </label>
+              );
+            })}
           </div>
+          {noneConfigured && (
+            <p className="mt-1 text-[11px] text-fg-subtle">
+              Attach a provider key under <strong>Live provider keys</strong> to create keys
+              for it.
+            </p>
+          )}
         </div>
 
         <label className="block text-xs font-medium text-fg-muted">
@@ -299,7 +335,7 @@ function CreateKeyForm({
             onChange={(e) => setDefaultProvider(e.target.value)}
           >
             <option value="">none (require provider/ prefix)</option>
-            {allowed.map((p) => (
+            {picked.map((p) => (
               <option key={p} value={p}>
                 {p}
               </option>
@@ -377,15 +413,14 @@ function CreateKeyForm({
             </span>
           ) : (
             <span className="text-xs text-fg-subtle">
-              — no live key for {missingLive.join(", ") || "these providers"}. Add one under{" "}
-              <strong>Live provider keys</strong>.
+              — pick a provider you've configured under <strong>Live provider keys</strong>.
             </span>
           )}
         </label>
 
         <button
           onClick={submit}
-          disabled={!label.trim() || allowed.length === 0}
+          disabled={!label.trim() || picked.length === 0}
           className="rounded-md bg-brand-600 px-4 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
         >
           Create key
@@ -562,10 +597,15 @@ export function Account() {
     }
   }, [authenticated, isAdmin, refreshAuth]);
 
-  // providers this account can actually make live calls on (env or attached key)
-  const liveProviders = account
-    ? account.providers.filter((p) => p.source !== "none").map((p) => p.provider)
-    : [];
+  // providers this account has a key configured for (env or attached) — stable
+  // reference so CreateKeyForm's effects don't loop.
+  const liveProviders = useMemo(
+    () =>
+      account
+        ? account.providers.filter((p) => p.source !== "none").map((p) => p.provider)
+        : [],
+    [account],
+  );
   const keyLiveReady = (k: KeyRow) =>
     isAdmin || k.allowed_providers.some((p) => liveProviders.includes(p));
 
