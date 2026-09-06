@@ -11,7 +11,6 @@ import { useAuth } from "../lib/auth";
 import { defaultFilters, toQuery, type Filters } from "../lib/filters";
 import { FilterBar } from "../components/FilterBar";
 import { SummaryCards } from "../components/SummaryCards";
-import { MetricsRow } from "../components/MetricsRow";
 import { UsageOverTimeChart } from "../components/UsageOverTimeChart";
 import { UsageByProviderChart } from "../components/UsageByProviderChart";
 import { UsageByModelChart } from "../components/UsageByModelChart";
@@ -90,7 +89,6 @@ export function Dashboard() {
       )}
 
       <SummaryCards data={summary} loading={loading} />
-      <MetricsRow data={summary} loading={loading} />
 
       <div className="grid gap-4 lg:grid-cols-2">
         <UsageOverTimeChart data={timeseries} />
