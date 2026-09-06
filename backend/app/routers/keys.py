@@ -6,8 +6,8 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.gateway import period_spend
-from app.models import AllowedProvider, ProviderCredential, UsageLog, User, VirtualKey
+from app.gateway import any_live_key, period_spend
+from app.models import AllowedProvider, UsageLog, User, VirtualKey
 from app.providers import SUPPORTED
 from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUpdate
 from app.security import new_key, require_user
@@ -19,25 +19,6 @@ router = APIRouter(prefix="/api/keys", tags=["keys"])
 def _visible_user_ids(db: Session, user: User) -> list[int] | None:
     """User ids whose keys `user` may see/manage. None = all (admin)."""
     return None if user.is_admin else [user.id]
-
-
-def _live_allowed(db: Session, user: User, providers: list[str]) -> bool:
-    """A key may make live calls only if the owner is admin, or there is a usable
-    provider key — a server env var or one the account has attached — for at least
-    one of *this key's* allowed providers. A key whose providers aren't configured
-    would silently fall back to simulated, so we don't let it claim allow_live."""
-    if user.is_admin:
-        return True
-    if any(settings.provider_api_key(p) for p in providers):
-        return True
-    attached = set(
-        db.scalars(
-            select(ProviderCredential.provider).where(
-                ProviderCredential.user_id == user.id
-            )
-        )
-    )
-    return any(p in attached for p in providers)
 
 
 def _validate_providers(names: list[str]) -> list[str]:
@@ -103,9 +84,9 @@ def create_key(
         label=label,
         key_hash=hashed,
         key_prefix=prefix,
-        # live mode: admin, or an account with a provider key for one of this
-        # key's providers (call-time still checks the key + the account's cap)
-        allow_live=bool(body.allow_live) and _live_allowed(db, user, providers),
+        # live mode needs a real provider key (env / admin-global / attached) for
+        # one of this key's providers; call-time still checks the account's cap
+        allow_live=bool(body.allow_live) and any_live_key(db, user.id, providers),
         default_provider=body.default_provider,
         monthly_budget_usd=body.monthly_budget_usd,
         budget_period=body.budget_period,
@@ -176,7 +157,7 @@ def update_key(
 ) -> dict:
     vk = _owned(db, key_id, user)
     if body.allow_live is not None:
-        vk.allow_live = bool(body.allow_live) and _live_allowed(db, user, vk.provider_names())
+        vk.allow_live = bool(body.allow_live) and any_live_key(db, user.id, vk.provider_names())
     if body.default_provider is not None:
         if body.default_provider and body.default_provider not in vk.provider_names():
             raise HTTPException(422, "default_provider must be one of allowed_providers")

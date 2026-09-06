@@ -194,6 +194,27 @@ def _account_provider_key(db: Session, user_id: int, provider: str) -> str | Non
     return decrypt(row.ciphertext) if row else None
 
 
+def any_live_key(db: Session, user_id: int | None, provider_names: list[str]) -> bool:
+    """True when a real provider key exists for at least one of `provider_names` —
+    a server env var, the admin-global DB key, or (for a signed-in user) one the
+    account has attached. A key with no configured provider would silently fall
+    back to simulated, so callers use this to refuse `allow_live` — admin too."""
+    if any(providers.is_configured(p) for p in provider_names):
+        return True
+    if user_id is None:
+        return False
+    from app.models import ProviderCredential
+
+    attached = set(
+        db.scalars(
+            select(ProviderCredential.provider).where(
+                ProviderCredential.user_id == user_id
+            )
+        )
+    )
+    return any(p in attached for p in provider_names)
+
+
 def live_key_for(db: Session, vk: VirtualKey, provider: str) -> str | None:
     """The API key a live call for this key + provider would use: a server env var,
     then the owning account's own key, then the admin-global DB key."""

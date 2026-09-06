@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.demo import seed_user_sample
-from app.models import ProviderCredential, User
+from app.gateway import any_live_key
+from app.models import User
+from app.providers import SUPPORTED
 from app.security import (
     SESSION_COOKIE,
     current_user,
@@ -53,18 +55,6 @@ def _set_cookie(resp: Response, user_id: int) -> None:
     )
 
 
-def _can_live(db: Session, user: User) -> bool:
-    """Admin, or an account that has attached at least one of its own provider keys."""
-    if user.is_admin:
-        return True
-    return (
-        db.scalar(
-            select(ProviderCredential.id).where(ProviderCredential.user_id == user.id)
-        )
-        is not None
-    )
-
-
 def _me(db: Session, user: User | None) -> dict:
     if user is None:
         return {"authenticated": False, "user": None}
@@ -74,7 +64,8 @@ def _me(db: Session, user: User | None) -> dict:
             "id": user.id,
             "email": user.email,
             "is_admin": user.is_admin,
-            "can_live": _can_live(db, user),
+            # any provider (env / admin-global / attached) has a real key behind it
+            "can_live": any_live_key(db, user.id, list(SUPPORTED)),
         },
     }
 

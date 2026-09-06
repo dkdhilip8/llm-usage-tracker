@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Navigate } from "react-router-dom";
 import {
   api,
   PROVIDERS,
-  type Account,
   type BudgetPeriod,
   type KeyCreated,
   type KeyRow,
@@ -206,12 +205,10 @@ function ProviderPanel() {
 
 function CreateKeyForm({
   onCreated,
-  isAdmin = false,
   configuredProviders = [],
 }: {
   onCreated: () => void;
-  isAdmin?: boolean;
-  /** providers this account has a usable live key for (env or attached) */
+  /** providers with a real key behind them (server env / admin-global / attached) */
   configuredProviders?: string[];
 }) {
   const [label, setLabel] = useState("");
@@ -226,17 +223,17 @@ function CreateKeyForm({
   const [copied, setCopied] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  // You can only put a provider on a key once you've configured a key for it
-  // (a server env var or one attached under "Live provider keys"). Admin is exempt.
+  // A provider can only go on a key once it has a real key behind it — a server
+  // env var, the admin-global DB key, or one attached under "Live provider keys".
   const canPick = useCallback(
-    (p: string) => isAdmin || configuredProviders.includes(p),
-    [isAdmin, configuredProviders],
+    (p: string) => configuredProviders.includes(p),
+    [configuredProviders],
   );
   const picked = allowed.filter(canPick); // selections that actually count
-  const noneConfigured = !isAdmin && configuredProviders.length === 0;
-  // every picked provider is configured (for non-admin), so live mode is available
-  // whenever at least one provider is on the key.
-  const liveReady = isAdmin || picked.length > 0;
+  const noneConfigured = configuredProviders.length === 0;
+  // every picked provider is configured, so live mode is available whenever at
+  // least one provider is on the key.
+  const liveReady = picked.length > 0;
 
   useEffect(() => {
     if (!liveReady && allowLive) setAllowLive(false);
@@ -303,7 +300,7 @@ function CreateKeyForm({
               return (
                 <label
                   key={p}
-                  title={ok ? undefined : `Attach a ${p} key under "Live provider keys" first`}
+                  title={ok ? undefined : `No key configured for ${p}`}
                   className={`flex items-center gap-1.5 text-sm ${
                     ok ? "" : "cursor-not-allowed opacity-40"
                   }`}
@@ -321,8 +318,8 @@ function CreateKeyForm({
           </div>
           {noneConfigured && (
             <p className="mt-1 text-[11px] text-fg-subtle">
-              Attach a provider key under <strong>Live provider keys</strong> to create keys
-              for it.
+              No provider keys configured. Add one (a server env var, or under{" "}
+              <strong>Live provider keys</strong>) to create keys for it.
             </p>
           )}
         </div>
@@ -409,11 +406,11 @@ function CreateKeyForm({
           Allow live calls
           {liveReady ? (
             <span className="text-xs text-fg-subtle">
-              (runs on your provider key, under your monthly cap)
+              (runs on the configured provider key, under the monthly cap)
             </span>
           ) : (
             <span className="text-xs text-fg-subtle">
-              — pick a provider you've configured under <strong>Live provider keys</strong>.
+              — add a configured provider to this key first.
             </span>
           )}
         </label>
@@ -579,7 +576,7 @@ function AccountTools({ onChange }: { onChange: () => void }) {
 export function Account() {
   const { authenticated, isAdmin, loading, logout, user, refresh: refreshAuth } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
-  const [account, setAccount] = useState<Account | null>(null);
+  const [configured, setConfigured] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -589,25 +586,20 @@ export function Account() {
       .listKeys()
       .then(setKeys)
       .catch((e: Error) => setError(e.message));
-    if (!isAdmin) {
-      api
-        .getAccount()
-        .then(setAccount)
-        .catch(() => setAccount(null));
-    }
+    // which providers have a real key behind them. Admin reads the server-side
+    // provider status; a regular user reads their own attached keys.
+    (isAdmin
+      ? api.providers().then((rows) => rows.filter((r) => r.configured).map((r) => r.provider))
+      : api
+          .getAccount()
+          .then((a) => a.providers.filter((p) => p.configured).map((p) => p.provider))
+    )
+      .then(setConfigured)
+      .catch(() => setConfigured([]));
   }, [authenticated, isAdmin, refreshAuth]);
 
-  // providers this account has a key configured for (env or attached) — stable
-  // reference so CreateKeyForm's effects don't loop.
-  const liveProviders = useMemo(
-    () =>
-      account
-        ? account.providers.filter((p) => p.source !== "none").map((p) => p.provider)
-        : [],
-    [account],
-  );
   const keyLiveReady = (k: KeyRow) =>
-    isAdmin || k.allowed_providers.some((p) => liveProviders.includes(p));
+    k.allowed_providers.some((p) => configured.includes(p));
 
   useEffect(() => {
     refresh();
@@ -651,11 +643,7 @@ export function Account() {
           {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
           {!isAdmin && <LiveKeysCard onChange={refresh} />}
         </div>
-        <CreateKeyForm
-          onCreated={refresh}
-          isAdmin={isAdmin}
-          configuredProviders={liveProviders}
-        />
+        <CreateKeyForm onCreated={refresh} configuredProviders={configured} />
       </div>
 
       {isAdmin && <DemoTools onChange={refresh} />}

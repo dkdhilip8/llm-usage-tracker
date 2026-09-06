@@ -89,6 +89,29 @@ def test_allow_live_gated_on_the_keys_own_providers(signup):
     assert c.patch(f"/api/keys/{k['id']}", json={"allow_live": True}).json()["allow_live"] is True
 
 
+def test_admin_allow_live_also_needs_a_configured_provider(client, admin, monkeypatch):
+    from app.config import settings
+
+    # admin with nothing configured — allow_live still can't be granted
+    r = client.post(
+        "/api/keys",
+        json={"label": "a", "allowed_providers": ["openai"], "allow_live": True},
+        headers=admin,
+    )
+    assert r.status_code == 200 and r.json()["allow_live"] is False
+    assert client.get("/api/auth/me", headers=admin).json()["user"]["can_live"] is False
+
+    # a server env var for openai makes it available
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-env-openai-key")
+    r = client.post(
+        "/api/keys",
+        json={"label": "b", "allowed_providers": ["openai"], "allow_live": True},
+        headers=admin,
+    )
+    assert r.status_code == 200 and r.json()["allow_live"] is True
+    assert client.get("/api/auth/me", headers=admin).json()["user"]["can_live"] is True
+
+
 def test_live_cap_patch_and_clamp(signup):
     c, _ = signup("cap@example.com")
     acct = c.get("/api/account").json()
