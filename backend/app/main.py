@@ -10,7 +10,7 @@ from starlette.types import Scope
 from app import providers
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.routers import demo, insights, keys, openai_compat, proxy, usage
+from app.routers import auth, demo, insights, keys, openai_compat, proxy, usage
 from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
@@ -35,12 +35,13 @@ class SPAStaticFiles(StaticFiles):
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     Base.metadata.create_all(bind=engine)
-    providers.warm_cache()  # best-effort liveness check for any configured provider
-    if settings.SEED_DEMO_DATA:
-        from app.demo import seed_if_empty
+    with SessionLocal() as db:
+        providers.load_db_keys(db)  # decrypt any admin-entered provider keys
+        if settings.SEED_DEMO_DATA:
+            from app.demo import seed_if_empty
 
-        with SessionLocal() as db:
             seed_if_empty(db)
+    providers.warm_cache()  # best-effort liveness check for any configured provider
     yield
 
 
@@ -65,9 +66,11 @@ def healthz() -> dict:
         "status": "ok",
         "version": settings.VERSION,
         "live_enabled": settings.ENABLE_LIVE,
+        "db_keys_enabled": settings.ALLOW_DB_PROVIDER_KEYS,
     }
 
 
+app.include_router(auth.router)
 app.include_router(keys.router)
 app.include_router(proxy.router)
 app.include_router(openai_compat.router)

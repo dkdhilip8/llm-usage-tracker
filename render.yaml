@@ -19,6 +19,11 @@ services:
         generateValue: true
       - key: SECRET_KEY
         generateValue: true
+      # Admin login front door. Required in a deployed ENVIRONMENT.
+      - key: ADMIN_USERNAME
+        value: admin
+      - key: ADMIN_PASSWORD
+        generateValue: true
       # Keep the public demo simulated + free. To enable real calls later: set
       # ENABLE_LIVE=true, add the provider key(s) below, and give a key `allow_live`.
       - key: ENABLE_LIVE

@@ -69,6 +69,23 @@ class AllowedProvider(Base):
     virtual_key: Mapped[VirtualKey] = relationship(back_populates="allowed_providers")
 
 
+class ProviderCredential(Base):
+    """An admin-entered provider API key, encrypted at rest. Only consulted when
+    ALLOW_DB_PROVIDER_KEYS is on; a server env var for the same provider wins."""
+
+    __tablename__ = "provider_credentials"
+
+    provider: Mapped[str] = mapped_column(String, primary_key=True)  # openai|anthropic|openrouter
+    ciphertext: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet token
+    last4: Mapped[str] = mapped_column(String(8), nullable=False)  # display only
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class UsageLog(Base):
     __tablename__ = "usage_logs"
 

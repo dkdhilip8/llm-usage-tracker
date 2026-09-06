@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   api,
-  getAdminToken,
   type ChatResult,
   type KeyInspect,
   type ModelInfo,
 } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { Card } from "../components/Card";
 import { usd } from "../lib/format";
 
@@ -13,6 +13,7 @@ const DEFAULT_PROMPT =
   "In two sentences, explain what an LLM gateway does and why usage tracking matters.";
 
 export function Playground() {
+  const { authenticated } = useAuth();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [key, setKey] = useState("");
   const [inspect, setInspect] = useState<KeyInspect | null>(null);
@@ -102,7 +103,7 @@ export function Playground() {
 
   // The Playground sends requests through the gateway (it writes usage_logs and
   // needs a vk_ key), so it is admin-only on the shared public demo.
-  if (!getAdminToken()) {
+  if (!authenticated) {
     return (
       <div className="mx-auto max-w-md">
         <Card title="Playground">

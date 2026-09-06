@@ -18,6 +18,21 @@ class Settings(BaseSettings):
     # usable; a deployed value (production/staging) makes them a hard startup error.
     ENVIRONMENT: str = "development"
 
+    # ---- admin login (single account) ----
+    ADMIN_USERNAME: str = "admin"
+    # Empty => password login is disabled (the X-Admin-Token header still works).
+    # Required (min 12 chars) when ENVIRONMENT is deployed.
+    ADMIN_PASSWORD: str = ""
+    # Signed session-cookie lifetime.
+    SESSION_TTL_HOURS: int = 168
+
+    # ---- provider-credential encryption (only used when ALLOW_DB_PROVIDER_KEYS) ----
+    # A urlsafe-base64 32-byte Fernet key. Empty => derived from SECRET_KEY.
+    ENCRYPTION_KEY: str = ""
+    # Let an admin store provider API keys in the DB (encrypted) via the UI.
+    # HARD-BLOCKED in a deployed ENVIRONMENT — public deploys use server env vars only.
+    ALLOW_DB_PROVIDER_KEYS: bool = False
+
     # Postgres. Render/Neon hand out `postgres://` or `postgresql://`; `sqlalchemy_url`
     # rewrites the scheme to the psycopg3 driver.
     DATABASE_URL: str = "postgresql+psycopg://llm:llm@localhost:5432/llmtracker"
@@ -58,21 +73,28 @@ class Settings(BaseSettings):
     VERSION: str = "0.7.0"
 
     @model_validator(mode="after")
-    def _reject_dev_secrets_when_deployed(self) -> "Settings":
-        """Fail closed: a deployed ENVIRONMENT must not run on the built-in
-        development ADMIN_TOKEN / SECRET_KEY."""
-        if self.ENVIRONMENT.strip().lower() in _DEPLOYED_ENVS:
-            offenders = []
-            if self.ADMIN_TOKEN == _DEV_ADMIN_TOKEN:
-                offenders.append("ADMIN_TOKEN")
-            if self.SECRET_KEY == _DEV_SECRET_KEY:
-                offenders.append("SECRET_KEY")
-            if offenders:
-                raise ValueError(
-                    f"ENVIRONMENT={self.ENVIRONMENT!r} but {', '.join(offenders)} "
-                    "still set to the built-in development default. Set a real "
-                    "value (Render's blueprint generates one automatically)."
-                )
+    def _validate_deployment(self) -> "Settings":
+        """Fail closed on unsafe config in a deployed ENVIRONMENT."""
+        if self.ENVIRONMENT.strip().lower() not in _DEPLOYED_ENVS:
+            return self
+        errors = []
+        if self.ADMIN_TOKEN == _DEV_ADMIN_TOKEN:
+            errors.append("ADMIN_TOKEN is still the built-in development default")
+        if self.SECRET_KEY == _DEV_SECRET_KEY:
+            errors.append("SECRET_KEY is still the built-in development default")
+        if not self.ADMIN_PASSWORD:
+            errors.append("ADMIN_PASSWORD must be set (admin login front door)")
+        elif len(self.ADMIN_PASSWORD) < 12:
+            errors.append("ADMIN_PASSWORD must be at least 12 characters")
+        if self.ALLOW_DB_PROVIDER_KEYS:
+            errors.append(
+                "ALLOW_DB_PROVIDER_KEYS must be off in a deployed environment — "
+                "use server env vars for provider credentials"
+            )
+        if errors:
+            raise ValueError(
+                f"ENVIRONMENT={self.ENVIRONMENT!r}: " + "; ".join(errors)
+            )
         return self
 
     @property

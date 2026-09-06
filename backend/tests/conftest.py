@@ -9,11 +9,18 @@ import os
 
 # Force test values — override anything the container/.env already set.
 os.environ["ADMIN_TOKEN"] = "test-admin"
+os.environ["ADMIN_USERNAME"] = "tester"
+os.environ["ADMIN_PASSWORD"] = "test-password-1234"
 os.environ["SECRET_KEY"] = "test-secret"
 os.environ["ENABLE_LIVE"] = "false"
 os.environ["SEED_DEMO_DATA"] = "false"
 os.environ["SIMULATE_LATENCY_SLEEP"] = "false"
 os.environ["LOG_BODIES"] = "true"
+os.environ["ALLOW_DB_PROVIDER_KEYS"] = "true"  # dev-only feature, exercised in tests
+# Never let a developer's real provider keys (from ./.env) bleed into tests.
+os.environ["OPENAI_API_KEY"] = ""
+os.environ["ANTHROPIC_API_KEY"] = ""
+os.environ["OPENROUTER_API_KEY"] = ""
 
 _TEST_DB = os.environ.get(
     "TEST_DATABASE_URL",
@@ -60,14 +67,18 @@ def _schema():
 
 @pytest.fixture(autouse=True)
 def _clean_tables():
+    from app import providers as _p
+
     with SessionLocal() as s:
         s.execute(
             text(
-                "TRUNCATE usage_logs, allowed_providers, virtual_keys "
-                "RESTART IDENTITY CASCADE"
+                "TRUNCATE usage_logs, allowed_providers, virtual_keys, "
+                "provider_credentials RESTART IDENTITY CASCADE"
             )
         )
         s.commit()
+    _p._db_keys.clear()  # drop stale decrypted-key cache between tests
+    _p._cache.clear()
     yield
 
 

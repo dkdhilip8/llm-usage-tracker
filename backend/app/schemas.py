@@ -69,7 +69,13 @@ class ProviderStatus(BaseModel):
     env_var: str
     configured: bool
     valid: bool
+    source: str = "none"  # "env" | "db" | "none"
+    last4: str | None = None  # only when source == "db"
     checked_at: str | None = None
+
+
+class ProviderKeyIn(BaseModel):
+    api_key: str = Field(min_length=8, max_length=400)
 
 
 class KeyInspect(BaseModel):

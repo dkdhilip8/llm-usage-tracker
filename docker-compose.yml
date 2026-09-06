@@ -21,8 +21,12 @@ services:
     environment:
       DATABASE_URL: postgresql+psycopg://llm:llm@db:5432/llmtracker
       ADMIN_TOKEN: dev-admin-token
+      ADMIN_USERNAME: admin
+      ADMIN_PASSWORD: dev-password
       SECRET_KEY: dev-secret
       CORS_ORIGINS: http://localhost:5173
+      # Local-only: let the Admin UI store provider keys (encrypted) in the DB.
+      ALLOW_DB_PROVIDER_KEYS: "true"
       # Provider creds + live switch come from the gitignored ./.env (never committed).
       # Absent .env => all blank, ENABLE_LIVE=false => fully simulated.
       ENABLE_LIVE: ${ENABLE_LIVE:-false}

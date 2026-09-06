@@ -7,7 +7,6 @@ const insights = vi.fn();
 const investigate = vi.fn();
 
 vi.mock("../lib/api", () => ({
-  getAdminToken: () => "test-token",
   api: {
     insights: (...a: unknown[]) => insights(...a),
     investigate: (...a: unknown[]) => investigate(...a),

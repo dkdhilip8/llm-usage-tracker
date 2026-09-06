@@ -1,14 +1,17 @@
 """Provider credentials, liveness checks (cached), and real upstream calls.
 
-Credentials come from server env vars only — never the DB, never the UI, never
-per-user. Live calls are dormant unless ENABLE_LIVE is set AND the calling virtual
-key has allow_live AND the provider is configured & reachable."""
+Credentials resolve as: server env var wins; otherwise, only when
+ALLOW_DB_PROVIDER_KEYS is on, an admin-entered key decrypted from the DB. Live
+calls are dormant unless ENABLE_LIVE is set AND the calling virtual key has
+allow_live AND the provider is configured & reachable."""
 
 import json
 import time
 from collections.abc import Iterator
 
 import httpx
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.config import settings
 
@@ -34,17 +37,81 @@ _CHAT_URLS = {
 
 # provider -> (valid: bool, checked_at: epoch seconds)
 _cache: dict[str, tuple[bool, float]] = {}
+# provider -> decrypted admin-entered key (only populated when ALLOW_DB_PROVIDER_KEYS)
+_db_keys: dict[str, str] = {}
+
+
+def resolved_key(provider: str) -> str:
+    """Server env var wins; otherwise the DB key (if that feature is on)."""
+    env = settings.provider_api_key(provider)
+    if env:
+        return env
+    if settings.ALLOW_DB_PROVIDER_KEYS:
+        return _db_keys.get(provider, "")
+    return ""
+
+
+def key_source(provider: str) -> str:
+    if settings.provider_api_key(provider):
+        return "env"
+    if settings.ALLOW_DB_PROVIDER_KEYS and _db_keys.get(provider):
+        return "db"
+    return "none"
 
 
 def is_configured(provider: str) -> bool:
-    return bool(settings.provider_api_key(provider))
+    return bool(resolved_key(provider))
 
 
 def _auth_headers(provider: str) -> dict[str, str]:
-    key = settings.provider_api_key(provider)
+    key = resolved_key(provider)
     if provider == "anthropic":
         return {"x-api-key": key, "anthropic-version": "2023-06-01"}
     return {"Authorization": f"Bearer {key}"}
+
+
+# ---- DB-stored keys (encrypted) ----
+def load_db_keys(db: Session) -> None:
+    """Refresh the in-process decrypted-key cache from provider_credentials."""
+    _db_keys.clear()
+    if not settings.ALLOW_DB_PROVIDER_KEYS:
+        return
+    from app.crypto import decrypt
+    from app.models import ProviderCredential
+
+    for row in db.scalars(select(ProviderCredential)):
+        plain = decrypt(row.ciphertext)
+        if plain:
+            _db_keys[row.provider] = plain
+
+
+def set_db_key(db: Session, provider: str, api_key: str) -> str:
+    """Encrypt + upsert an admin-entered key. Returns its last 4 chars."""
+    from app.crypto import encrypt
+    from app.models import ProviderCredential
+
+    last4 = api_key[-4:]
+    row = db.get(ProviderCredential, provider)
+    if row is None:
+        db.add(ProviderCredential(provider=provider, ciphertext=encrypt(api_key), last4=last4))
+    else:
+        row.ciphertext = encrypt(api_key)
+        row.last4 = last4
+    db.commit()
+    _db_keys[provider] = api_key
+    _cache.pop(provider, None)  # force a fresh liveness check
+    return last4
+
+
+def clear_db_key(db: Session, provider: str) -> None:
+    from app.models import ProviderCredential
+
+    row = db.get(ProviderCredential, provider)
+    if row is not None:
+        db.delete(row)
+        db.commit()
+    _db_keys.pop(provider, None)
+    _cache.pop(provider, None)
 
 
 def check_liveness(provider: str, *, force: bool = False) -> bool:
@@ -80,6 +147,7 @@ def status(*, force: bool = False) -> list[dict]:
                 "env_var": ENV_VARS[provider],
                 "configured": configured,
                 "valid": valid,
+                "source": key_source(provider),
                 "checked_at": (
                     time.strftime(
                         "%Y-%m-%dT%H:%M:%SZ", time.gmtime(checked[1])

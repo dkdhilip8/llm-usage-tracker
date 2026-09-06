@@ -1,28 +1,127 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   api,
-  getAdminToken,
   PROVIDERS,
-  setAdminToken,
   type BudgetPeriod,
   type KeyCreated,
   type KeyRow,
   type ProviderStatus,
 } from "../lib/api";
+import { useAuth } from "../lib/auth";
 import { Card } from "../components/Card";
 import { num, relTime, usd } from "../lib/format";
 
+function ProviderKeyRow({
+  p,
+  onChange,
+}: {
+  p: ProviderStatus;
+  onChange: () => void;
+}) {
+  const [editing, setEditing] = useState(p.source === "none");
+  const [value, setValue] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function save() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.setProviderKey(p.provider, value.trim());
+      setValue("");
+      setEditing(false);
+      onChange();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+  async function clear() {
+    setBusy(true);
+    setErr(null);
+    try {
+      await api.clearProviderKey(p.provider);
+      onChange();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (p.source === "env") {
+    return (
+      <span className="ml-auto rounded bg-fill px-1.5 py-0.5 text-[10px] text-fg-muted">
+        set via server env
+      </span>
+    );
+  }
+  return (
+    <div className="ml-auto flex items-center gap-1.5">
+      {p.source === "db" && !editing && (
+        <>
+          <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+            saved ····{p.last4}
+          </span>
+          <button
+            onClick={() => setEditing(true)}
+            className="text-[11px] text-brand-600 hover:underline"
+          >
+            replace
+          </button>
+          <button
+            onClick={clear}
+            disabled={busy}
+            className="text-[11px] text-red-600 hover:underline disabled:opacity-50"
+          >
+            clear
+          </button>
+        </>
+      )}
+      {editing && (
+        <>
+          <input
+            type="password"
+            placeholder={`paste ${p.provider} key`}
+            className="w-40 rounded border border-line px-1.5 py-0.5 text-[11px]"
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+          />
+          <button
+            onClick={save}
+            disabled={busy || value.trim().length < 8}
+            className="rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+          >
+            save
+          </button>
+          {p.source === "db" && (
+            <button
+              onClick={() => setEditing(false)}
+              className="text-[11px] text-fg-subtle hover:underline"
+            >
+              cancel
+            </button>
+          )}
+        </>
+      )}
+      {err && <span className="text-[10px] text-red-600">{err}</span>}
+    </div>
+  );
+}
+
 function ProviderPanel() {
   const [rows, setRows] = useState<ProviderStatus[] | null>(null);
+  const [dbKeys, setDbKeys] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback((refresh = false) => {
     setBusy(true);
-    api
-      .providers(refresh)
-      .then((r) => {
+    Promise.all([api.providers(refresh), api.health()])
+      .then(([r, h]) => {
         setRows(r);
+        setDbKeys(h.db_keys_enabled);
         setErr(null);
       })
       .catch((e: Error) => setErr(e.message))
@@ -58,34 +157,43 @@ function ProviderPanel() {
             <li key={p.provider} className="flex items-center gap-2">
               <span className={`inline-block h-2 w-2 shrink-0 rounded-full ${dot}`} />
               <span className="font-medium capitalize">{p.provider}</span>
-              <code className="rounded bg-fill px-1 text-[11px] text-fg-muted">
-                {p.env_var}
-              </code>
-              <span className="ml-auto text-xs text-fg-subtle">{text}</span>
+              {dbKeys ? (
+                <ProviderKeyRow p={p} onChange={() => load()} />
+              ) : (
+                <>
+                  <code className="rounded bg-fill px-1 text-[11px] text-fg-muted">
+                    {p.env_var}
+                  </code>
+                  <span className="ml-auto text-xs text-fg-subtle">{text}</span>
+                </>
+              )}
             </li>
           );
         })}
       </ul>
 
       <details className="mt-3 text-[11px] text-fg-muted">
-        <summary className="cursor-pointer text-brand-600">How to configure</summary>
+        <summary className="cursor-pointer text-brand-600">How keys are resolved</summary>
         <div className="mt-2 space-y-1">
           <p>
-            Set the provider key as a <strong>server environment variable</strong> — never entered
-            here, never stored in the database.
+            A <strong>server environment variable</strong> (<code>OPENAI_API_KEY</code> etc.)
+            always wins.
           </p>
+          {dbKeys ? (
+            <p>
+              Otherwise a key pasted here is stored <strong>AES-encrypted</strong> in the
+              database (only its last 4 digits are ever shown back). This is a local /
+              non-production convenience — the public deploy uses env vars only.
+            </p>
+          ) : (
+            <p>
+              DB-stored keys are <strong>off</strong> on this deployment. Set provider keys as
+              server env vars (Render → <em>Environment</em>), then <code>ENABLE_LIVE=true</code>.
+            </p>
+          )}
           <p>
-            Local: add to <code>backend/.env</code> or the <code>backend</code> service in{" "}
-            <code>docker-compose.yml</code>, then restart.
-          </p>
-          <p>
-            Render: service → <em>Environment</em> → add <code>OPENAI_API_KEY</code> etc., then{" "}
-            <code>ENABLE_LIVE=true</code>.
-          </p>
-          <p>
-            A request only goes live when <code>ENABLE_LIVE=true</code> <em>and</em> the virtual key
-            has <em>allow live</em> <em>and</em> the provider is configured &amp; valid — otherwise
-            it stays simulated.
+            A request only goes live when <code>ENABLE_LIVE=true</code> <em>and</em> the virtual
+            key has <em>allow live</em> <em>and</em> the provider is configured &amp; valid.
           </p>
         </div>
       </details>
@@ -342,53 +450,89 @@ function DemoTools({ onChange }: { onChange: () => void }) {
   );
 }
 
+function LoginForm() {
+  const { login } = useAuth();
+  const [username, setUsername] = useState("admin");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      await login(username.trim(), password);
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-md">
+      <Card title="Admin sign in">
+        <p className="mb-3 text-sm text-fg-muted">
+          Manage providers and virtual keys. The Dashboard, Requests and Insights tabs
+          need no sign in.
+        </p>
+        <form onSubmit={submit} className="space-y-3">
+          <label className="block text-xs font-medium text-fg-muted">
+            Username
+            <input
+              className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm"
+              autoComplete="username"
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+            />
+          </label>
+          <label className="block text-xs font-medium text-fg-muted">
+            Password
+            <input
+              type="password"
+              autoComplete="current-password"
+              className="mt-1 w-full rounded-md border border-line px-3 py-2 text-sm"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+            />
+          </label>
+          {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
+          <button
+            type="submit"
+            disabled={busy || !username.trim() || !password}
+            className="w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+          >
+            {busy ? "Signing in…" : "Sign in"}
+          </button>
+        </form>
+      </Card>
+    </div>
+  );
+}
+
 export function Admin() {
-  const [token, setToken] = useState(getAdminToken());
-  const [savedToken, setSavedToken] = useState(getAdminToken());
+  const { authenticated, loading, logout } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
-    if (!savedToken) return;
+    if (!authenticated) return;
     api
       .listKeys()
       .then(setKeys)
       .catch((e: Error) => setError(e.message));
-  }, [savedToken]);
+  }, [authenticated]);
 
   useEffect(() => {
     refresh();
   }, [refresh]);
 
-  if (!savedToken) {
-    return (
-      <div className="mx-auto max-w-md">
-        <Card title="Admin access">
-          <p className="mb-3 text-sm text-fg-muted">
-            Enter the admin token to manage providers and virtual keys. Viewing the
-            dashboard needs no token.
-          </p>
-          <input
-            type="password"
-            className="w-full rounded-md border border-line px-3 py-2 text-sm"
-            placeholder="ADMIN_TOKEN"
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-          />
-          <button
-            onClick={() => {
-              setAdminToken(token.trim());
-              setSavedToken(token.trim());
-              setError(null);
-            }}
-            disabled={!token.trim()}
-            className="mt-3 w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-          >
-            Continue
-          </button>
-        </Card>
-      </div>
-    );
+  if (loading) {
+    return <div className="mx-auto max-w-md p-6 text-sm text-fg-subtle">Loading…</div>;
+  }
+  if (!authenticated) {
+    return <LoginForm />;
   }
 
   return (
@@ -397,13 +541,12 @@ export function Admin() {
         <h1 className="text-lg font-semibold text-fg">Gateway admin</h1>
         <button
           onClick={() => {
-            setAdminToken("");
-            setSavedToken("");
+            void logout();
             setKeys([]);
           }}
           className="text-sm text-fg-muted hover:underline"
         >
-          Sign out of admin
+          Sign out
         </button>
       </div>
 

@@ -1,24 +1,9 @@
 const BASE = import.meta.env.VITE_API_BASE_URL ?? "";
 
-export function getAdminToken(): string {
-  try {
-    return localStorage.getItem("admin_token") ?? "";
-  } catch {
-    return "";
-  }
-}
-
-export function setAdminToken(token: string): void {
-  try {
-    localStorage.setItem("admin_token", token);
-  } catch {
-    /* private mode / storage blocked — nothing to do */
-  }
-}
-
 async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
   const res = await fetch(BASE + path, {
     ...init,
+    credentials: "include", // carry the admin session cookie
     headers: { "Content-Type": "application/json", ...(init.headers ?? {}) },
   });
   if (!res.ok) {
@@ -31,10 +16,6 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
     throw new Error(typeof detail === "string" ? detail : JSON.stringify(detail));
   }
   return (await res.json()) as T;
-}
-
-function adminHeaders(): Record<string, string> {
-  return { "X-Admin-Token": getAdminToken() };
 }
 
 // ---- types ----
@@ -53,6 +34,8 @@ export interface ProviderStatus {
   env_var: string;
   configured: boolean;
   valid: boolean;
+  source: "env" | "db" | "none";
+  last4: string | null;
   checked_at: string | null;
 }
 
@@ -226,29 +209,48 @@ export interface Investigation {
 
 export const api = {
   health: () =>
-    req<{ status: string; version: string; live_enabled: boolean }>("/healthz"),
+    req<{
+      status: string;
+      version: string;
+      live_enabled: boolean;
+      db_keys_enabled: boolean;
+    }>("/healthz"),
   models: () => req<ModelInfo[]>("/api/models"),
+
+  // ---- admin auth ----
+  me: () => req<{ authenticated: boolean; username: string | null }>("/api/auth/me"),
+  login: (username: string, password: string) =>
+    req<{ authenticated: boolean; username: string }>("/api/auth/login", {
+      method: "POST",
+      body: JSON.stringify({ username, password }),
+    }),
+  logout: () => req<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
 
   // public, read-only
   insights: () => req<{ alerts: InsightAlert[] }>("/api/insights/alerts"),
   investigate: (id: string) =>
     req<Investigation>(`/api/insights/alerts/${encodeURIComponent(id)}`),
 
-  // admin-only demo-data controls
+  // admin-only demo-data controls (session cookie carries auth)
   injectDemoSpike: () =>
     req<{ inserted: number; key_label: string }>("/api/insights/demo-spike", {
       method: "POST",
-      headers: adminHeaders(),
     }),
   resetDemo: () =>
     req<{ keys: number; usage_rows: number; days: number }>("/api/demo/reset", {
       method: "POST",
-      headers: adminHeaders(),
     }),
 
   providers: (refresh = false) =>
-    req<ProviderStatus[]>(`/api/providers${refresh ? "?refresh=true" : ""}`, {
-      headers: adminHeaders(),
+    req<ProviderStatus[]>(`/api/providers${refresh ? "?refresh=true" : ""}`),
+  setProviderKey: (provider: string, apiKey: string) =>
+    req<{ provider: string; source: string; last4: string; valid: boolean }>(
+      `/api/providers/${provider}/key`,
+      { method: "PUT", body: JSON.stringify({ api_key: apiKey }) },
+    ),
+  clearProviderKey: (provider: string) =>
+    req<{ provider: string; source: string }>(`/api/providers/${provider}/key`, {
+      method: "DELETE",
     }),
 
   usageSummary: (qs: string) => req<UsageSummary>(`/api/usage/summary${qs}`),
@@ -262,7 +264,7 @@ export const api = {
       `/api/requests${qs}`,
     ),
 
-  listKeys: () => req<KeyRow[]>("/api/keys", { headers: adminHeaders() }),
+  listKeys: () => req<KeyRow[]>("/api/keys"),
   createKey: (input: {
     label: string;
     allowed_providers: string[];
@@ -276,7 +278,6 @@ export const api = {
     req<KeyCreated>("/api/keys", {
       method: "POST",
       body: JSON.stringify(input),
-      headers: adminHeaders(),
     }),
   updateKey: (
     id: number,
@@ -293,12 +294,10 @@ export const api = {
     req<Record<string, unknown>>(`/api/keys/${id}`, {
       method: "PATCH",
       body: JSON.stringify(patch),
-      headers: adminHeaders(),
     }),
   revokeKey: (id: number) =>
     req<{ id: number; revoked_at: string }>(`/api/keys/${id}`, {
       method: "DELETE",
-      headers: adminHeaders(),
     }),
 
   inspectKey: (key: string) =>
