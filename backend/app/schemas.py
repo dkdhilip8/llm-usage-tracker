@@ -85,21 +85,20 @@ class AccountProviderStatus(BaseModel):
     configured: bool
     source: str  # "env" | "account" | "none"
     last4: str | None = None  # only when source == "account"
+    monthly_cap_usd: float | None = None  # None => the account default applies
+    spend_this_month: float = 0.0  # live spend routed through this provider this month
 
 
 class AccountOut(BaseModel):
     email: str
     is_admin: bool
     can_live: bool  # is_admin or has at least one attached provider key
-    live_cap_usd: float | None  # None => the default below applies
-    live_cap_default_usd: float
-    live_cap_max_usd: float
-    live_spend_this_month: float
+    live_cap_default_usd: float  # fallback cap for a provider with no explicit one
     providers: list[AccountProviderStatus]
 
 
-class AccountPatch(BaseModel):
-    live_cap_usd: float | None = Field(default=None, ge=0)
+class ProviderCapIn(BaseModel):
+    monthly_cap_usd: float | None = Field(default=None, ge=0)  # null => clear (use the default)
 
 
 class KeyInspect(BaseModel):

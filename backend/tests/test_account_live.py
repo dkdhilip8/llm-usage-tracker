@@ -1,5 +1,6 @@
-"""Per-account live mode: attach your own provider key + a monthly cap, then
-your virtual keys can make live calls billed to that key, capped."""
+"""Per-account live mode: attach your own provider key(s), each with its own
+monthly cap; your virtual keys then make live calls billed to those keys, capped
+per provider."""
 
 import datetime as _dt
 
@@ -110,15 +111,30 @@ def test_admin_allow_live_also_needs_a_configured_provider(client, admin, monkey
     assert client.get("/api/auth/me", headers=admin).json()["user"]["can_live"] is True
 
 
-def test_live_cap_patch_and_clamp(signup):
+def _cap(acct, provider):
+    return next(p for p in acct["providers"] if p["provider"] == provider)["monthly_cap_usd"]
+
+
+def test_provider_cap_set_and_clear(signup):
     c, _ = signup("cap@example.com")
     acct = c.get("/api/account").json()
-    assert acct["live_cap_usd"] is None
-    assert acct["live_cap_default_usd"] == 5.0 and acct["live_cap_max_usd"] == 10.0
+    assert acct["live_cap_default_usd"] == 5.0
+    assert "live_cap_max_usd" not in acct  # no hard ceiling anymore
+    assert _cap(acct, "openai") is None  # default applies until set
 
-    assert c.patch("/api/account", json={"live_cap_usd": 500}).json()["live_cap_usd"] == 10.0
-    assert c.patch("/api/account", json={"live_cap_usd": 3}).json()["live_cap_usd"] == 3.0
-    assert c.patch("/api/account", json={"live_cap_usd": -1}).status_code == 422
+    # can't cap a provider you haven't configured
+    assert c.patch("/api/account/providers/openai/cap", json={"monthly_cap_usd": 20}).status_code == 404
+
+    c.put("/api/account/providers/openai/key", json={"api_key": "sk-openai-mine-1"})
+    # any non-negative value — no clamp
+    r = c.patch("/api/account/providers/openai/cap", json={"monthly_cap_usd": 500})
+    assert r.status_code == 200 and _cap(r.json(), "openai") == 500.0
+    assert c.patch("/api/account/providers/openai/cap", json={"monthly_cap_usd": -1}).status_code == 422
+    # null clears it back to the default
+    assert _cap(
+        c.patch("/api/account/providers/openai/cap", json={"monthly_cap_usd": None}).json(),
+        "openai",
+    ) is None
 
 
 def test_env_var_blocks_account_key(signup, monkeypatch):
@@ -130,14 +146,15 @@ def test_env_var_blocks_account_key(signup, monkeypatch):
     assert r.status_code == 409
 
 
-def test_live_spend_cap_enforced(signup):
+def test_live_spend_cap_is_per_provider(signup):
     c, _ = signup("spend@example.com")
     c.put("/api/account/providers/openrouter/key", json={"api_key": "sk-or-v1-teamkey"})
-    c.patch("/api/account", json={"live_cap_usd": 1})
-    k = _mk_key(c, allowed_providers=["openrouter"], allow_live=True)
+    c.put("/api/account/providers/anthropic/key", json={"api_key": "sk-ant-mine-2"})
+    c.patch("/api/account/providers/openrouter/cap", json={"monthly_cap_usd": 1})
+    k = _mk_key(c, allowed_providers=["openrouter", "anthropic"], allow_live=True)
     assert k["allow_live"] is True
 
-    # record live spend past the $1 cap directly
+    # record $2 of live openrouter spend directly (past its $1 cap)
     from sqlalchemy import select
 
     from app.db import SessionLocal
@@ -155,13 +172,22 @@ def test_live_spend_cap_enforced(signup):
         )
         db.commit()
 
+    hdr = {"Authorization": f"Bearer {k['key']}"}
+    # openrouter is over its cap -> 402
     r = c.post(
         "/v1/proxy/chat",
         json={"provider": "openrouter", "model": "meta-llama/llama-3.3-70b-instruct", "prompt": "hi"},
-        headers={"Authorization": f"Bearer {k['key']}"},
+        headers=hdr,
     )
-    assert r.status_code == 402
-    assert r.json()["detail"]["type"] == "live_cap_exceeded"
+    assert r.status_code == 402 and r.json()["detail"]["type"] == "live_cap_exceeded"
+    assert "openrouter" in r.json()["detail"]["message"]
+
+    # anthropic (separate cap, default, no spend) is unaffected
+    assert c.post(
+        "/v1/proxy/chat",
+        json={"provider": "anthropic", "model": "claude-3-5-haiku", "prompt": "hi"},
+        headers=hdr,
+    ).status_code == 200
 
 
 def test_clear_provider_key_drops_can_live(signup):
@@ -177,5 +203,7 @@ def test_clear_provider_key_drops_can_live(signup):
 
 def test_account_endpoints_need_sign_in(client):
     assert client.get("/api/account").status_code == 401
-    assert client.patch("/api/account", json={"live_cap_usd": 5}).status_code == 401
+    assert client.patch(
+        "/api/account/providers/openai/cap", json={"monthly_cap_usd": 5}
+    ).status_code == 401
     assert client.put("/api/account/providers/openai/key", json={"api_key": "sk-x-12345678"}).status_code == 401

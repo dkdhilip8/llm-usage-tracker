@@ -51,16 +51,15 @@ export interface AccountProvider {
   configured: boolean;
   source: "env" | "account" | "none";
   last4: string | null;
+  monthly_cap_usd: number | null; // null => the account default applies
+  spend_this_month: number; // live spend routed through this provider this month
 }
 
 export interface Account {
   email: string;
   is_admin: boolean;
   can_live: boolean;
-  live_cap_usd: number | null; // null => the default applies
-  live_cap_default_usd: number;
-  live_cap_max_usd: number;
-  live_spend_this_month: number;
+  live_cap_default_usd: number; // fallback cap when a provider has no explicit one
   providers: AccountProvider[];
 }
 
@@ -220,10 +219,8 @@ export const api = {
   clearMyData: () => req<{ cleared: boolean }>("/api/account/data", { method: "DELETE" }),
   deleteAccount: () => req<{ deleted: boolean }>("/api/account", { method: "DELETE" }),
 
-  // ---- per-account live mode (your own provider key + monthly cap) ----
+  // ---- live mode: your own provider keys, each with a monthly cap ----
   getAccount: () => req<Account>("/api/account"),
-  patchAccount: (patch: { live_cap_usd?: number }) =>
-    req<Account>("/api/account", { method: "PATCH", body: JSON.stringify(patch) }),
   setAccountProviderKey: (provider: string, apiKey: string) =>
     req<{ provider: string; last4: string; valid: boolean }>(
       `/api/account/providers/${provider}/key`,
@@ -231,6 +228,11 @@ export const api = {
     ),
   clearAccountProviderKey: (provider: string) =>
     req<{ provider: string }>(`/api/account/providers/${provider}/key`, { method: "DELETE" }),
+  setProviderCap: (provider: string, monthlyCapUsd: number | null) =>
+    req<Account>(`/api/account/providers/${provider}/cap`, {
+      method: "PATCH",
+      body: JSON.stringify({ monthly_cap_usd: monthlyCapUsd }),
+    }),
 
   providers: (refresh = false) =>
     req<ProviderStatus[]>(`/api/providers${refresh ? "?refresh=true" : ""}`),

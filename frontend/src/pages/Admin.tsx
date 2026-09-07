@@ -206,13 +206,10 @@ function ProviderPanel() {
 function CreateKeyForm({
   onCreated,
   configuredProviders = [],
-  liveCap = null,
 }: {
   onCreated: () => void;
   /** providers with a real key behind them (server env / admin-global / attached) */
   configuredProviders?: string[];
-  /** the account's effective monthly live-spend cap (null for admin) */
-  liveCap?: number | null;
 }) {
   const [label, setLabel] = useState("");
   const [allowed, setAllowed] = useState<string[]>([]);
@@ -235,11 +232,6 @@ function CreateKeyForm({
   // a new key makes live calls whenever it has at least one configured provider;
   // it falls back to simulated automatically otherwise (or if ENABLE_LIVE is off).
   const willBeLive = picked.length > 0;
-
-  // a per-key budget above the account's live cap is effectively clamped for live calls
-  const budgetNum = budget.trim() ? Number(budget) : null;
-  const budgetOverCap =
-    willBeLive && liveCap != null && budgetNum != null && budgetNum > liveCap;
 
   // keep the selection valid as configured providers change: drop any that are no
   // longer pickable, and default to the first available one.
@@ -396,20 +388,13 @@ function CreateKeyForm({
         <p className="text-[11px] text-fg-subtle">
           {willBeLive ? (
             <>
-              This key will make <strong>live calls</strong> on your provider key, under your
-              monthly cap. Pause it any time from the keys table below.
+              This key will make <strong>live calls</strong> on your provider key, under that
+              provider's monthly cap. Pause it any time from the keys table below.
             </>
           ) : (
             <>Add a configured provider above — until then this key runs simulated.</>
           )}
         </p>
-
-        {budgetOverCap && (
-          <p className="text-[11px] text-amber-700 dark:text-amber-400">
-            This budget is above your ${liveCap} account live-spend cap — live calls stop at
-            the account cap first.
-          </p>
-        )}
 
         <button
           onClick={submit}
@@ -505,7 +490,6 @@ export function Account() {
   const { authenticated, isAdmin, loading, logout, user, refresh: refreshAuth } = useAuth();
   const [keys, setKeys] = useState<KeyRow[]>([]);
   const [configured, setConfigured] = useState<string[]>([]);
-  const [liveCap, setLiveCap] = useState<number | null>(null); // effective account cap (non-admin)
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
@@ -525,10 +509,9 @@ export function Account() {
     } else {
       api
         .getAccount()
-        .then((a) => {
-          setConfigured(a.providers.filter((p) => p.configured).map((p) => p.provider));
-          setLiveCap(a.live_cap_usd ?? a.live_cap_default_usd);
-        })
+        .then((a) =>
+          setConfigured(a.providers.filter((p) => p.configured).map((p) => p.provider)),
+        )
         .catch(() => setConfigured([]));
     }
   }, [authenticated, isAdmin, refreshAuth]);
@@ -578,11 +561,7 @@ export function Account() {
           {isAdmin ? <ProviderPanel /> : <AccountTools onChange={refresh} />}
           {!isAdmin && <LiveKeysCard onChange={refresh} />}
         </div>
-        <CreateKeyForm
-          onCreated={refresh}
-          configuredProviders={configured}
-          liveCap={isAdmin ? null : liveCap}
-        />
+        <CreateKeyForm onCreated={refresh} configuredProviders={configured} />
       </div>
 
       <Card title={`Virtual keys (${keys.length})`}>

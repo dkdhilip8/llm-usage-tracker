@@ -61,7 +61,7 @@ def proxy_chat(
         raise HTTPException(422, "prompt or messages is required")
     enforce_user_quota(db, vk)
     enforce_budget(db, vk)
-    enforce_account_cap(db, vk)
+    enforce_account_cap(db, vk, body.provider)
 
     result = run_completion(db, vk, body.provider, body.model, prompt)
     row = record_usage(db, vk, body.provider, body.model, prompt, result)

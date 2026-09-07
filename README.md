@@ -15,15 +15,15 @@ OpenAI · Anthropic · OpenRouter · Google Gemini.
 > curl / SDK / CI) sees every account's keys + usage and owns server-side provider config.
 >
 > **Per-account live mode.** On the Account page a signed-in user attaches their **own**
-> OpenAI/Anthropic/OpenRouter/Gemini key (encrypted at rest, shown back only as `····last4`) and
-> sets a monthly spend cap. Their virtual keys can then be flagged **allow live** and make real
-> upstream calls billed to that key, blocked once the month's live spend hits the cap (default
-> `LIVE_CAP_DEFAULT_USD`, hard ceiling `LIVE_CAP_MAX_USD` = $10). They copy the raw `vk_…`
-> strings and hand them to whoever needs them — **recipients need no account**. A key with no
-> configured provider stays **simulated**.
+> OpenAI/Anthropic/OpenRouter/Gemini key(s) (encrypted at rest, shown back only as `····last4`),
+> each with its **own monthly spend cap** (any non-negative value; `LIVE_CAP_DEFAULT_USD` = $5
+> applies until they set one). A virtual key for a configured provider then makes real upstream
+> calls billed to that key, blocked once that provider's monthly live spend hits its cap. They
+> copy the raw `vk_…` strings and hand them to whoever needs them — **recipients need no
+> account**. A key with no configured provider stays **simulated**.
 >
 > **Abuse controls:** `MAX_USERS`, signups/IP/hour, per-account caps on keys / stored usage
-> rows / requests-per-hour, and the server-enforced per-account live-spend cap. No email
+> rows / requests-per-hour, and the server-enforced per-provider live-spend cap. No email
 > verification or password reset yet.
 >
 > **Provider keys** normally come from server env vars only. Outside production an admin can set
@@ -194,13 +194,13 @@ Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 | `MAX_USAGE_ROWS_PER_USER` | `4000` | The proxy stops recording once an account hits this. |
 | `PLAYGROUND_REQUESTS_PER_HOUR` | `120` | Per-account proxy rate limit (non-admin). |
 | `ALLOW_LIVE_KEYS` | `true` | Let users attach their own provider key on the Account page to enable live mode for their virtual keys. |
-| `LIVE_CAP_DEFAULT_USD` / `LIVE_CAP_MAX_USD` | `5` / `10` | Default / hard ceiling for an account's monthly live-spend cap. |
+| `LIVE_CAP_DEFAULT_USD` | `5` | Default monthly live-spend cap for a provider key with no explicit cap. Users can set any non-negative per-provider value on the Account page (no ceiling). |
 | `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing **and** session-cookie signing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` | `""` | Server-side provider creds. Always win over a DB-stored key. Never shown in the UI. Gemini uses Google's OpenAI-compatible endpoint. |
 | `ALLOW_DB_PROVIDER_KEYS` | `false` | Let the Admin UI store provider keys (AES-encrypted) in the DB. Convenience for non-production — **hard-blocked when `ENVIRONMENT` is deployed**. |
 | `ENCRYPTION_KEY` | `""` | Fernet key (urlsafe-base64, 32 bytes) for that encryption. Empty ⇒ derived from `SECRET_KEY`. |
-| `ENABLE_LIVE` | `false` | Master switch for real upstream calls. When off, every request runs simulated. When on, a request still needs its virtual key flagged `allow_live` **and** a configured provider key, and it stops at the owning account's monthly cap. |
+| `ENABLE_LIVE` | `false` | Master switch for real upstream calls. When off, every request runs simulated. When on, a request still needs its virtual key flagged `allow_live` **and** a configured provider key, and it stops at that provider's monthly cap. |
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
 | `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the Requests tab. Off by default — bodies can be sensitive. |
 | `SIMULATE_LATENCY_SLEEP` | `true` | In dry-run mode, sleep for the simulated latency. Tests set `false`. |
@@ -221,8 +221,9 @@ admin → all.
 | POST | `/api/auth/signup` `\|` `/login` | — | `{email, password}` → sets `httpOnly` session cookie, `{authenticated, user:{id,email,is_admin,can_live}}` |
 | POST `\|` GET | `/api/auth/logout` `\|` `/me` | — | clear the cookie / current principal |
 | DELETE `\|` DELETE | `/api/account/data` `\|` `/api/account` | user | wipe my keys+usage / delete my account |
-| GET `\|` PATCH | `/api/account` | user | my account (email, `can_live`, `live_cap_usd`, `live_spend_this_month`, per-provider status) / set `{live_cap_usd}` (clamped to `LIVE_CAP_MAX_USD`) |
+| GET | `/api/account` | user | my account: `email`, `can_live`, `live_cap_default_usd`, and `providers[]` (`source`, `last4`, `monthly_cap_usd`, `spend_this_month`) |
 | PUT `\|` DELETE | `/api/account/providers/{provider}/key` | user | attach / clear **my own** encrypted provider key. `409` if a server env var is set for that provider |
+| PATCH | `/api/account/providers/{provider}/cap` | user | set `{monthly_cap_usd}` for that provider (`null` clears → the default). `404` unless a key for that provider is attached |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured, valid, source, last4, checked_at}]` (`?refresh=true` to re-check) |
 | PUT `\|` DELETE | `/api/providers/{provider}/key` | admin | set / clear a DB-stored (encrypted) provider key. `404` unless `ALLOW_DB_PROVIDER_KEYS`; `409` if a server env var is set for that provider |
 | POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(needs a configured provider key), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
@@ -240,11 +241,9 @@ viewer-scoped (user → their own, admin → all). The proxy (`/v1/*`) requires 
 
 ## Data model
 
-- **users** — `id, email (unique), password_hash (scrypt), is_admin, live_cap_usd, created_at`.
-  The admin row is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot. Sessions are a
-  stateless HMAC-signed cookie carrying the user id. `live_cap_usd` NULL ⇒ `LIVE_CAP_DEFAULT_USD`
-  applies; `enforce_account_cap` blocks the account's live calls once the calendar month's
-  `mode='live'` spend hits it.
+- **users** — `id, email (unique), password_hash (scrypt), is_admin, created_at`. The admin row
+  is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot. Sessions are a stateless
+  HMAC-signed cookie carrying the user id.
 - **virtual_keys** — `id, user_id → users, label, key_hash, key_prefix, allow_live,
   default_provider, monthly_budget_usd, budget_period, budget_start, budget_end, created_at,
   last_used_at, revoked_at`. Only the HMAC hash and an 11-char prefix are stored; the raw key is
@@ -257,12 +256,14 @@ viewer-scoped (user → their own, admin → all). The proxy (`/v1/*`) requires 
   total_tokens, cost, cost_source, mode, simulated, latency_ms, status, prompt_preview,
   response_preview, ts`. `cost_source` = `provider` (real charge, e.g. OpenRouter `usage.cost`) or
   `configured` (tokens × price table). Previews are null unless `LOG_BODIES=true`.
-- **provider_credentials** — `(id, user_id → users, provider, ciphertext, last4, updated_at)`,
-  unique on `(user_id, provider)`. `user_id` set = that account's own key (its live-flagged
-  virtual keys call real providers on it); `user_id` NULL = the admin-global key (only when
-  `ALLOW_DB_PROVIDER_KEYS`, never in a deployed environment). `ciphertext` is a Fernet
-  (AES-128-CBC + HMAC) token; the plaintext key is never returned by the API. A server env var for
-  the same provider always wins.
+- **provider_credentials** — `(id, user_id → users, provider, ciphertext, last4, monthly_cap_usd,
+  updated_at)`, unique on `(user_id, provider)`. `user_id` set = that account's own key (its
+  live-flagged virtual keys call real providers on it) with its own monthly live-spend cap
+  (`monthly_cap_usd` NULL ⇒ `LIVE_CAP_DEFAULT_USD`); `enforce_account_cap` blocks live calls on a
+  provider once the calendar month's `mode='live'` spend on it hits that cap. `user_id` NULL =
+  the admin-global key (only when `ALLOW_DB_PROVIDER_KEYS`, never in a deployed environment).
+  `ciphertext` is a Fernet (AES-128-CBC + HMAC) token; the plaintext key is never returned by the
+  API. A server env var for the same provider always wins.
 
 On a deployed environment, provider credentials live only in server env vars — never in the DB,
 never sent to the browser. `/api/providers` reports presence + liveness as booleans (+ `source`

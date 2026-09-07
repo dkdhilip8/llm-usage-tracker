@@ -5,101 +5,165 @@ import { usd } from "../lib/format";
 
 function ProviderRow({
   p,
+  defaultCap,
   onChange,
 }: {
   p: AccountProvider;
+  defaultCap: number;
   onChange: () => void;
 }) {
   const [editing, setEditing] = useState(p.source === "none");
   const [val, setVal] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [cap, setCap] = useState("");
+  const [busy, setBusy] = useState<null | "key" | "cap">(null);
   const [err, setErr] = useState<string | null>(null);
 
-  const save = async () => {
-    setBusy(true);
+  const run = async (kind: "key" | "cap", fn: () => Promise<unknown>) => {
+    setBusy(kind);
     setErr(null);
     try {
+      await fn();
+      onChange();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const saveKey = () =>
+    run("key", async () => {
       await api.setAccountProviderKey(p.provider, val.trim());
       setVal("");
       setEditing(false);
-      onChange();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-  const clear = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.clearAccountProviderKey(p.provider);
-      onChange();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
+    });
+  const clearKey = () => run("key", () => api.clearAccountProviderKey(p.provider));
+  const saveCap = () =>
+    run("cap", async () => {
+      await api.setProviderCap(
+        p.provider,
+        cap.trim() === "" ? null : Number(cap),
+      );
+      setCap("");
+    });
+
+  const effCap = p.monthly_cap_usd ?? defaultCap;
+  const over = p.spend_this_month >= effCap;
 
   return (
-    <li className="flex flex-wrap items-center gap-1.5 text-sm">
-      <span className="font-medium capitalize">{p.provider}</span>
-      {p.source === "env" ? (
-        <span className="ml-auto rounded bg-fill px-1.5 py-0.5 text-[10px] text-fg-muted">
-          set via server env
-        </span>
-      ) : (
-        <div className="ml-auto flex items-center gap-1.5">
-          {p.source === "account" && !editing && (
-            <>
-              <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
-                saved ····{p.last4}
-              </span>
-              <button
-                className="text-[11px] text-brand-600 hover:underline"
-                onClick={() => setEditing(true)}
-              >
-                replace
-              </button>
-              <button
-                className="text-[11px] text-red-600 hover:underline disabled:opacity-50"
-                disabled={busy}
-                onClick={clear}
-              >
-                clear
-              </button>
-            </>
-          )}
-          {editing && (
-            <>
-              <input
-                type="password"
-                placeholder={`paste ${p.provider} key`}
-                className="w-40 rounded border border-line px-1.5 py-0.5 text-[11px]"
-                value={val}
-                onChange={(e) => setVal(e.target.value)}
-              />
-              <button
-                className="rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-brand-700 disabled:opacity-50"
-                disabled={busy || val.trim().length < 8}
-                onClick={save}
-              >
-                save
-              </button>
-              {p.source === "account" && (
+    <li className="space-y-1.5 border-b border-line pb-2 last:border-0 last:pb-0">
+      <div className="flex flex-wrap items-center gap-1.5 text-sm">
+        <span className="font-medium capitalize">{p.provider}</span>
+        {p.source === "env" ? (
+          <span className="ml-auto rounded bg-fill px-1.5 py-0.5 text-[10px] text-fg-muted">
+            set via server env
+          </span>
+        ) : (
+          <div className="ml-auto flex items-center gap-1.5">
+            {p.source === "account" && !editing && (
+              <>
+                <span className="rounded bg-emerald-100 px-1.5 py-0.5 text-[10px] text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-400">
+                  saved ····{p.last4}
+                </span>
                 <button
-                  className="text-[11px] text-fg-subtle hover:underline"
-                  onClick={() => setEditing(false)}
+                  className="text-[11px] text-brand-600 hover:underline"
+                  onClick={() => setEditing(true)}
                 >
-                  cancel
+                  replace
                 </button>
-              )}
-            </>
-          )}
+                <button
+                  className="text-[11px] text-red-600 hover:underline disabled:opacity-50"
+                  disabled={busy !== null}
+                  onClick={clearKey}
+                >
+                  clear
+                </button>
+              </>
+            )}
+            {editing && (
+              <>
+                <input
+                  type="password"
+                  placeholder={`paste ${p.provider} key`}
+                  className="w-40 rounded border border-line px-1.5 py-0.5 text-[11px]"
+                  value={val}
+                  onChange={(e) => setVal(e.target.value)}
+                />
+                <button
+                  className="rounded bg-brand-600 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+                  disabled={busy !== null || val.trim().length < 8}
+                  onClick={saveKey}
+                >
+                  save
+                </button>
+                {p.source === "account" && (
+                  <button
+                    className="text-[11px] text-fg-subtle hover:underline"
+                    onClick={() => setEditing(false)}
+                  >
+                    cancel
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+      </div>
+
+      {p.source === "account" && (
+        <div className="pl-0.5">
+          <div className="flex justify-between text-[11px] text-fg-subtle">
+            <span>live spend this month</span>
+            <span>
+              {usd(p.spend_this_month)} / {usd(effCap)}
+            </span>
+          </div>
+          <div className="mt-1 h-1.5 rounded bg-fill">
+            <div
+              className={`h-1.5 rounded ${over ? "bg-red-500" : "bg-brand-500"}`}
+              style={{
+                width: `${Math.min(
+                  100,
+                  effCap > 0 ? (p.spend_this_month / effCap) * 100 : 100,
+                )}%`,
+              }}
+            />
+          </div>
+          <div className="mt-1.5 flex items-center gap-1.5">
+            <span className="text-[11px] text-fg-muted">Monthly cap $</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              className="w-24 rounded-md border border-line px-2 py-0.5 text-[11px]"
+              placeholder={
+                p.monthly_cap_usd != null
+                  ? String(p.monthly_cap_usd)
+                  : `${defaultCap} (default)`
+              }
+              value={cap}
+              onChange={(e) => setCap(e.target.value)}
+            />
+            <button
+              className="rounded-md border border-line px-2 py-0.5 text-[11px] text-fg-muted hover:bg-fill disabled:opacity-50"
+              disabled={busy !== null || cap.trim() === ""}
+              onClick={saveCap}
+            >
+              set
+            </button>
+            {p.monthly_cap_usd != null && (
+              <button
+                className="text-[11px] text-brand-600 hover:underline disabled:opacity-50"
+                disabled={busy !== null}
+                onClick={() => run("cap", () => api.setProviderCap(p.provider, null))}
+              >
+                use default
+              </button>
+            )}
+          </div>
         </div>
       )}
-      {err && <span className="w-full text-right text-[10px] text-red-600">{err}</span>}
+      {err && <div className="text-[10px] text-red-600">{err}</div>}
     </li>
   );
 }
@@ -107,8 +171,6 @@ function ProviderRow({
 export function LiveKeysCard({ onChange }: { onChange: () => void }) {
   const [acct, setAcct] = useState<Account | null>(null);
   const [err, setErr] = useState<string | null>(null);
-  const [cap, setCap] = useState("");
-  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     api
@@ -123,20 +185,6 @@ export function LiveKeysCard({ onChange }: { onChange: () => void }) {
     onChange();
   };
 
-  const saveCap = async () => {
-    setBusy(true);
-    setErr(null);
-    try {
-      await api.patchAccount({ live_cap_usd: Number(cap) });
-      setCap("");
-      refresh();
-    } catch (e) {
-      setErr((e as Error).message);
-    } finally {
-      setBusy(false);
-    }
-  };
-
   if (!acct) {
     return (
       <Card title="Live provider keys">
@@ -145,71 +193,30 @@ export function LiveKeysCard({ onChange }: { onChange: () => void }) {
     );
   }
 
-  const effectiveCap = acct.live_cap_usd ?? acct.live_cap_default_usd;
-
   return (
     <Card title="Live provider keys">
       <div className="space-y-3 text-sm">
         <p className="text-xs text-fg-muted">
-          Paste your own OpenAI / Anthropic / OpenRouter / Gemini key. Virtual keys for a
-          provider you've configured here then hit the real provider on your key and are billed
-          to you, stopping at your monthly cap. Only the last 4 digits are ever shown back.
+          Paste your own OpenAI / Anthropic / OpenRouter / Gemini key and set a monthly cap for
+          it. Virtual keys for a provider you've configured here hit the real provider on your key,
+          billed to you, and stop at that provider's cap. Only the last 4 digits are shown back.
         </p>
 
-        <ul className="space-y-1.5">
+        <ul className="space-y-2">
           {acct.providers.map((p) => (
-            <ProviderRow key={p.provider} p={p} onChange={refresh} />
+            <ProviderRow
+              key={p.provider}
+              p={p}
+              defaultCap={acct.live_cap_default_usd}
+              onChange={refresh}
+            />
           ))}
         </ul>
 
-        <div className="border-t border-line pt-3">
-          <div className="flex justify-between text-[11px] text-fg-subtle">
-            <span>Live spend this month</span>
-            <span>
-              {usd(acct.live_spend_this_month)} / {usd(effectiveCap)}
-            </span>
-          </div>
-          <div className="mt-1 h-1.5 rounded bg-fill">
-            <div
-              className={`h-1.5 rounded ${
-                acct.live_spend_this_month >= effectiveCap ? "bg-red-500" : "bg-brand-500"
-              }`}
-              style={{
-                width: `${Math.min(
-                  100,
-                  effectiveCap > 0
-                    ? (acct.live_spend_this_month / effectiveCap) * 100
-                    : 100,
-                )}%`,
-              }}
-            />
-          </div>
-          <div className="mt-2 flex items-center gap-2">
-            <span className="text-xs text-fg-muted">Monthly cap $</span>
-            <input
-              type="number"
-              min="0"
-              max={acct.live_cap_max_usd}
-              step="1"
-              className="w-24 rounded-md border border-line px-2 py-1 text-sm"
-              placeholder={String(effectiveCap)}
-              value={cap}
-              onChange={(e) => setCap(e.target.value)}
-            />
-            <button
-              className="rounded-md border border-line px-2 py-1 text-xs text-fg-muted hover:bg-fill disabled:opacity-50"
-              disabled={busy || !cap.trim()}
-              onClick={saveCap}
-            >
-              set
-            </button>
-            <span className="text-[11px] text-fg-subtle">(max ${acct.live_cap_max_usd})</span>
-          </div>
-          <p className="mt-1.5 text-[11px] text-fg-subtle">
-            This is the ceiling on your <strong>live</strong> spend across <em>all</em> your keys
-            this month. A key still stops at its own budget first — whichever limit is lower wins.
-          </p>
-        </div>
+        <p className="text-[11px] text-fg-subtle">
+          Each provider's cap is separate. A virtual key also stops at its own budget —
+          whichever limit is lower wins.
+        </p>
 
         {err && <div className="text-sm text-red-600 dark:text-red-400">{err}</div>}
       </div>

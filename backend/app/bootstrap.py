@@ -47,17 +47,14 @@ def _migrate(db: Session) -> None:
         )
         db.commit()
 
-    # v2: per-account live mode — drop the short-lived workspaces feature, add
-    # users.live_cap_usd, and re-key provider_credentials on user_id.
+    # v2: per-account live mode — drop the short-lived workspaces feature and
+    # re-key provider_credentials on user_id.
     if _has_col(db, "users", "workspace_id"):
         # dropping the column also drops its FK to workspaces
         db.execute(text("ALTER TABLE users DROP COLUMN IF EXISTS workspace_id"))
         db.commit()
     if _has_table(db, "workspaces"):
         db.execute(text("DROP TABLE IF EXISTS workspaces CASCADE"))
-        db.commit()
-    if not _has_col(db, "users", "live_cap_usd"):
-        db.execute(text("ALTER TABLE users ADD COLUMN live_cap_usd NUMERIC(12, 6)"))
         db.commit()
     if _has_col(db, "provider_credentials", "workspace_id") or not _has_col(
         db, "provider_credentials", "user_id"
@@ -75,6 +72,17 @@ def _migrate(db: Session) -> None:
         db.execute(text("DELETE FROM users WHERE is_demo = true"))  # cascades keys -> usage
         db.commit()
         db.execute(text("ALTER TABLE users DROP COLUMN IF EXISTS is_demo"))
+        db.commit()
+
+    # v4: per-provider live-spend caps — move the cap off users onto each
+    # provider_credentials row.
+    if not _has_col(db, "provider_credentials", "monthly_cap_usd"):
+        db.execute(
+            text("ALTER TABLE provider_credentials ADD COLUMN monthly_cap_usd NUMERIC(12, 6)")
+        )
+        db.commit()
+    if _has_col(db, "users", "live_cap_usd"):
+        db.execute(text("ALTER TABLE users DROP COLUMN IF EXISTS live_cap_usd"))
         db.commit()
 
 

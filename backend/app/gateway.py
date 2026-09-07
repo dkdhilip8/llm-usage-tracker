@@ -230,11 +230,12 @@ def live_key_for(db: Session, vk: VirtualKey, provider: str) -> str | None:
     return None
 
 
-def live_spend_this_month(db: Session, user_id: int) -> float:
-    """Sum of this account's `mode='live'` cost since the 1st of the month."""
+def live_spend_this_month(db: Session, user_id: int, provider: str) -> float:
+    """This account's `mode='live'` cost on one provider since the 1st of the month."""
     val = db.scalar(
         select(func.coalesce(func.sum(UsageLog.cost), 0)).where(
             UsageLog.mode == "live",
+            UsageLog.provider == provider,
             UsageLog.ts >= func.date_trunc("month", func.now()),
             UsageLog.key_id.in_(
                 select(VirtualKey.id).where(VirtualKey.user_id == user_id)
@@ -244,28 +245,35 @@ def live_spend_this_month(db: Session, user_id: int) -> float:
     return float(val or 0)
 
 
-def account_live_cap(db: Session, user_id: int) -> float:
-    user = db.get(User, user_id)
-    if user is None or user.live_cap_usd is None:
-        return float(settings.LIVE_CAP_DEFAULT_USD)
-    return float(user.live_cap_usd)
+def provider_cap(db: Session, user_id: int, provider: str) -> float:
+    """The account's monthly live-spend cap for one provider (its own value, or
+    the LIVE_CAP_DEFAULT_USD fallback)."""
+    from app.models import ProviderCredential
+
+    row = db.scalar(
+        select(ProviderCredential.monthly_cap_usd).where(
+            ProviderCredential.user_id == user_id,
+            ProviderCredential.provider == provider,
+        )
+    )
+    return float(row) if row is not None else float(settings.LIVE_CAP_DEFAULT_USD)
 
 
-def enforce_account_cap(db: Session, vk: VirtualKey) -> None:
-    """An account's live spend can't exceed its monthly cap."""
+def enforce_account_cap(db: Session, vk: VirtualKey, provider: str) -> None:
+    """An account's live spend on a provider can't exceed that provider's monthly cap."""
     if not vk.allow_live or vk.user_id is None:
         return
     user = db.get(User, vk.user_id)
     if user is None or user.is_admin:
         return
-    cap = account_live_cap(db, vk.user_id)
-    spent = live_spend_this_month(db, vk.user_id)
+    cap = provider_cap(db, vk.user_id, provider)
+    spent = live_spend_this_month(db, vk.user_id, provider)
     if spent >= cap:
         raise HTTPException(
             status_code=402,
             detail={
                 "message": (
-                    f"account live-spend cap of ${cap:.2f}/month reached "
+                    f"{provider} live-spend cap of ${cap:.2f}/month reached "
                     f"(spent ${spent:.4f}) — raise it on your Account page"
                 ),
                 "type": "live_cap_exceeded",

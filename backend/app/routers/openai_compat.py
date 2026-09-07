@@ -80,7 +80,7 @@ def chat_completions(
         raise HTTPException(422, "messages must contain user text content")
     enforce_user_quota(db, vk)
     enforce_budget(db, vk)
-    enforce_account_cap(db, vk)
+    enforce_account_cap(db, vk, provider)
     live_key = live_key_for(db, vk, provider)
 
     cid = f"chatcmpl-{uuid4().hex}"

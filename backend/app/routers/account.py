@@ -1,10 +1,10 @@
 """Per-account live mode.
 
 A signed-in user attaches their own provider API key(s) here (encrypted at rest,
-shown back only as ``····last4``) and sets a monthly live-spend cap. Their
-virtual keys can then be flagged *allow live* and will make real upstream calls
-billed to that key, stopping at the cap. They hand the raw ``vk_...`` strings to
-whoever needs them — recipients need no account.
+shown back only as ``····last4``), each with its own monthly live-spend cap.
+Their virtual keys then make real upstream calls billed to those keys, stopping
+at each provider's cap. They hand the raw ``vk_...`` strings to whoever needs
+them — recipients need no account.
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Response
@@ -17,7 +17,7 @@ from app.crypto import encrypt
 from app.db import get_db
 from app.gateway import live_spend_this_month
 from app.models import ProviderCredential, User, VirtualKey
-from app.schemas import AccountOut, AccountPatch, AccountProviderStatus, ProviderKeyIn
+from app.schemas import AccountOut, AccountProviderStatus, ProviderCapIn, ProviderKeyIn
 from app.security import SESSION_COOKIE, require_user
 
 router = APIRouter(prefix="/api/account", tags=["account"])
@@ -47,6 +47,12 @@ def _provider_view(db: Session, user_id: int) -> list[AccountProviderStatus]:
                 configured=env or row is not None,
                 source="env" if env else ("account" if row else "none"),
                 last4=row.last4 if (row and not env) else None,
+                monthly_cap_usd=(
+                    float(row.monthly_cap_usd)
+                    if (row and row.monthly_cap_usd is not None)
+                    else None
+                ),
+                spend_this_month=round(live_spend_this_month(db, user_id, p), 4),
             )
         )
     return out
@@ -57,10 +63,7 @@ def _account_out(db: Session, user: User) -> AccountOut:
         email=user.email,
         is_admin=user.is_admin,
         can_live=user.is_admin or _has_any_key(db, user.id),
-        live_cap_usd=float(user.live_cap_usd) if user.live_cap_usd is not None else None,
         live_cap_default_usd=float(settings.LIVE_CAP_DEFAULT_USD),
-        live_cap_max_usd=float(settings.LIVE_CAP_MAX_USD),
-        live_spend_this_month=round(live_spend_this_month(db, user.id), 4),
         providers=_provider_view(db, user.id),
     )
 
@@ -72,15 +75,25 @@ def get_account(
     return _account_out(db, user)
 
 
-@router.patch("", response_model=AccountOut)
-def patch_account(
-    body: AccountPatch,
+@router.patch("/providers/{provider}/cap", response_model=AccountOut)
+def set_provider_cap(
+    provider: str,
+    body: ProviderCapIn,
     db: Session = Depends(get_db),
     user: User = Depends(require_user),
 ) -> AccountOut:
-    if body.live_cap_usd is not None:
-        user.live_cap_usd = min(body.live_cap_usd, settings.LIVE_CAP_MAX_USD)
-        db.commit()
+    if provider not in providers.SUPPORTED:
+        raise HTTPException(422, f"provider must be one of {list(providers.SUPPORTED)}")
+    row = db.scalar(
+        select(ProviderCredential).where(
+            ProviderCredential.user_id == user.id,
+            ProviderCredential.provider == provider,
+        )
+    )
+    if row is None:
+        raise HTTPException(404, f"configure a {provider} key before setting its cap")
+    row.monthly_cap_usd = body.monthly_cap_usd  # None clears it -> the default applies
+    db.commit()
     return _account_out(db, user)
 
 

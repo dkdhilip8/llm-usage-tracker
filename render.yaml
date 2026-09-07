@@ -26,8 +26,8 @@ services:
         generateValue: true
       # Live upstream calls are enabled — but only for a virtual key whose owner
       # has attached their own provider API key on the Account page, and only up
-      # to that account's monthly cap (<= $LIVE_CAP_MAX_USD). No server-side
-      # provider key is set below, so nothing is billed until someone attaches one.
+      # to that provider's monthly cap. No server-side provider key is set below,
+      # so nothing is billed until someone attaches one.
       - key: ENABLE_LIVE
         value: "true"
       # Don't store prompt/response bodies by default.

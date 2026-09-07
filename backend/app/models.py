@@ -22,10 +22,10 @@ class User(Base):
     """A signed-up account. `is_admin` users (the env ADMIN_USERNAME row, created
     on boot) see everything; regular users only see their own keys + usage.
 
-    A user can attach their own provider API key(s) (see ProviderCredential) plus
-    a monthly live-spend cap; their virtual keys can then make real upstream calls
-    billed to that key, and they hand the raw `vk_...` strings to whoever needs
-    them — recipients need no account."""
+    A user can attach their own provider API key(s) (see ProviderCredential), each
+    with its own monthly live-spend cap; their virtual keys then make real upstream
+    calls billed to those keys, and they hand the raw `vk_...` strings to whoever
+    needs them — recipients need no account."""
 
     __tablename__ = "users"
 
@@ -34,9 +34,6 @@ class User(Base):
     # "<salt_hex>$<scrypt_hex>", or "" when no password is set (header-token-only admin).
     password_hash: Mapped[str] = mapped_column(String, nullable=False, default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
-    # Ceiling on this account's live (mode='live') spend per calendar month.
-    # NULL => fall back to settings.LIVE_CAP_DEFAULT_USD.
-    live_cap_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
@@ -115,6 +112,9 @@ class ProviderCredential(Base):
     provider: Mapped[str] = mapped_column(String, nullable=False)  # openai|anthropic|openrouter
     ciphertext: Mapped[str] = mapped_column(Text, nullable=False)  # Fernet token
     last4: Mapped[str] = mapped_column(String(8), nullable=False)  # display only
+    # Monthly ceiling (USD) on live spend routed through this provider key.
+    # NULL => fall back to settings.LIVE_CAP_DEFAULT_USD.
+    monthly_cap_usd: Mapped[float | None] = mapped_column(Numeric(12, 6))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),
         server_default=func.now(),

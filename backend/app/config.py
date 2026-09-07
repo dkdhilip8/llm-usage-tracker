@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     MAX_USAGE_ROWS_PER_USER: int = 4000  # proxy stops recording past this
     PLAYGROUND_REQUESTS_PER_HOUR: int = 120
 
-    # ---- per-account live mode: attach your own provider key + a monthly cap ----
+    # ---- live mode: attach your own provider key(s) + a monthly cap per provider ----
     ALLOW_LIVE_KEYS: bool = True
-    LIVE_CAP_MAX_USD: float = 10.0  # hard ceiling on an account's monthly live-spend cap
+    # Default monthly live-spend cap for a provider whose key has no explicit cap.
     LIVE_CAP_DEFAULT_USD: float = 5.0
 
     # ---- provider-credential encryption (only used when ALLOW_DB_PROVIDER_KEYS) ----
@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # real. Tests set this false for speed.
     SIMULATE_LATENCY_SLEEP: bool = True
 
-    VERSION: str = "0.9.0"
+    VERSION: str = "0.9.1"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":
