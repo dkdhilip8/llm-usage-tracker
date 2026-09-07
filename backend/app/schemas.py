@@ -47,7 +47,7 @@ class KeyOut(BaseModel):
     id: int
     label: str
     key_prefix: str
-    owner_email: str | None = None  # only populated for admin
+    owner_username: str | None = None  # only populated for admin
     allowed_providers: list[str]
     allow_live: bool
     default_provider: str | None
@@ -90,7 +90,7 @@ class AccountProviderStatus(BaseModel):
 
 
 class AccountOut(BaseModel):
-    email: str
+    username: str
     is_admin: bool
     can_live: bool  # is_admin or has at least one attached provider key
     live_cap_default_usd: float  # fallback cap for a provider with no explicit one

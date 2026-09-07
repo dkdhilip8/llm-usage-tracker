@@ -1,6 +1,6 @@
 """Multi-tenant auth: signup + login (users and the admin account), session
-cookie, logout, and `/me`. No email verification or password reset yet. The
-X-Admin-Token header is a parallel admin credential."""
+cookie, logout, and `/me`. Username + password — no email, no password reset
+yet. The X-Admin-Token header is a parallel admin credential."""
 
 import time
 from collections import defaultdict, deque
@@ -23,7 +23,8 @@ from app.security import (
     verify_password,
 )
 
-_EMAIL_RE = r"^[^@\s]+@[^@\s]+\.[^@\s]+$"
+# 3–32 chars, alphanumeric plus . _ - inside, must start and end alphanumeric.
+_USERNAME_RE = r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{1,30}[A-Za-z0-9])$"
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -32,13 +33,12 @@ _signups: dict[str, deque[float]] = defaultdict(deque)
 
 
 class Credentials(BaseModel):
-    email: str = Field(pattern=_EMAIL_RE, max_length=200)
+    username: str = Field(pattern=_USERNAME_RE, max_length=40)
     password: str = Field(min_length=8, max_length=200)
 
 
 class LoginBody(BaseModel):
-    # accept either an email or the bare admin username
-    email: str
+    username: str
     password: str
 
 
@@ -61,7 +61,7 @@ def _me(db: Session, user: User | None) -> dict:
         "authenticated": True,
         "user": {
             "id": user.id,
-            "email": user.email,
+            "username": user.username,
             "is_admin": user.is_admin,
             # any provider (env / admin-global / attached) has a real key behind it
             "can_live": any_live_key(db, user.id, list(SUPPORTED)),
@@ -83,7 +83,7 @@ def _throttle_signup(ip: str) -> None:
 def signup(body: Credentials, request: Request, resp: Response, db: Session = Depends(get_db)) -> dict:
     if not settings.ALLOW_SIGNUP:
         raise HTTPException(403, "signup is disabled")
-    email = body.email.strip().lower()
+    username = body.username.strip().lower()
     _throttle_signup(request.client.host if request.client else "?")
 
     account_count = db.scalar(
@@ -91,10 +91,10 @@ def signup(body: Credentials, request: Request, resp: Response, db: Session = De
     )
     if (account_count or 0) >= settings.MAX_USERS:
         raise HTTPException(503, "sign-ups are currently closed — try again later")
-    if db.scalar(select(User.id).where(func.lower(User.email) == email)):
-        raise HTTPException(409, "an account with that email already exists")
+    if db.scalar(select(User.id).where(func.lower(User.username) == username)):
+        raise HTTPException(409, "that username is taken")
 
-    user = User(email=email, password_hash=hash_password(body.password))
+    user = User(username=username, password_hash=hash_password(body.password))
     db.add(user)
     db.commit()
     db.refresh(user)
@@ -104,13 +104,10 @@ def signup(body: Credentials, request: Request, resp: Response, db: Session = De
 
 @router.post("/login")
 def login(body: LoginBody, resp: Response, db: Session = Depends(get_db)) -> dict:
-    ident = body.email.strip().lower()
-    user = db.scalar(select(User).where(func.lower(User.email) == ident))
-    # allow signing in as admin with the bare ADMIN_USERNAME too
-    if user is None and ident == settings.ADMIN_USERNAME.strip().lower():
-        user = db.scalar(select(User).where(User.is_admin.is_(True)))
+    ident = body.username.strip().lower()
+    user = db.scalar(select(User).where(func.lower(User.username) == ident))
     if user is None or not verify_password(body.password, user.password_hash):
-        raise HTTPException(401, "invalid email or password")
+        raise HTTPException(401, "invalid username or password")
     _set_cookie(resp, user.id)
     return _me(db, user)
 

@@ -14,8 +14,8 @@ interface AuthCtx {
   authenticated: boolean;
   isAdmin: boolean;
   loading: boolean;
-  login: (email: string, password: string) => Promise<void>;
-  signup: (email: string, password: string) => Promise<void>;
+  login: (username: string, password: string) => Promise<void>;
+  signup: (username: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   refresh: () => Promise<void>;
 }
@@ -41,12 +41,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  const login = useCallback(async (email: string, password: string) => {
-    setUser((await api.login(email, password)).user);
+  const login = useCallback(async (username: string, password: string) => {
+    setUser((await api.login(username, password)).user);
   }, []);
 
-  const signup = useCallback(async (email: string, password: string) => {
-    setUser((await api.signup(email, password)).user);
+  const signup = useCallback(async (username: string, password: string) => {
+    setUser((await api.signup(username, password)).user);
   }, []);
 
   const logout = useCallback(async () => {

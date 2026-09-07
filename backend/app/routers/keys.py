@@ -120,9 +120,9 @@ def list_keys(
     if visible is not None:
         stmt = stmt.where(VirtualKey.user_id.in_(visible))
     keys = db.scalars(stmt).all()
-    # only admin sees more than one account's keys, so only admin needs owner emails
+    # only admin sees more than one account's keys, so only admin needs owner usernames
     multi = user.is_admin
-    emails = {u.id: u.email for u in db.scalars(select(User))} if multi else {}
+    usernames = {u.id: u.username for u in db.scalars(select(User))} if multi else {}
     out: list[KeyOut] = []
     for k in keys:
         requests, total_tokens, cost = rollup.get(k.id, (0, 0, 0.0))
@@ -131,7 +131,7 @@ def list_keys(
                 id=k.id,
                 label=k.label,
                 key_prefix=k.key_prefix,
-                owner_email=emails.get(k.user_id) if multi else None,
+                owner_username=usernames.get(k.user_id) if multi else None,
                 allowed_providers=k.provider_names(),
                 allow_live=k.allow_live,
                 default_provider=k.default_provider,

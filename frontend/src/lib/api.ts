@@ -41,7 +41,7 @@ export interface ProviderStatus {
 
 export interface AuthUser {
   id: number;
-  email: string;
+  username: string;
   is_admin: boolean;
   can_live: boolean; // is_admin, or has attached their own provider key
 }
@@ -56,7 +56,7 @@ export interface AccountProvider {
 }
 
 export interface Account {
-  email: string;
+  username: string;
   is_admin: boolean;
   can_live: boolean;
   live_cap_default_usd: number; // fallback cap when a provider has no explicit one
@@ -69,7 +69,7 @@ export interface KeyRow {
   id: number;
   label: string;
   key_prefix: string;
-  owner_email: string | null;
+  owner_username: string | null;
   allowed_providers: string[];
   allow_live: boolean;
   default_provider: string | null;
@@ -203,15 +203,15 @@ export const api = {
 
   // ---- auth ----
   me: () => req<{ authenticated: boolean; user: AuthUser | null }>("/api/auth/me"),
-  login: (email: string, password: string) =>
+  login: (username: string, password: string) =>
     req<{ authenticated: boolean; user: AuthUser }>("/api/auth/login", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ username, password }),
     }),
-  signup: (email: string, password: string) =>
+  signup: (username: string, password: string) =>
     req<{ authenticated: boolean; user: AuthUser }>("/api/auth/signup", {
       method: "POST",
-      body: JSON.stringify({ email, password }),
+      body: JSON.stringify({ username, password }),
     }),
   logout: () => req<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
 

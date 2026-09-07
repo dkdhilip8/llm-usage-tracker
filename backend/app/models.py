@@ -30,7 +30,7 @@ class User(Base):
     __tablename__ = "users"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)  # login id
+    username: Mapped[str] = mapped_column(String, nullable=False, unique=True)  # login id
     # "<salt_hex>$<scrypt_hex>", or "" when no password is set (header-token-only admin).
     password_hash: Mapped[str] = mapped_column(String, nullable=False, default="")
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

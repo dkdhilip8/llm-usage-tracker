@@ -60,7 +60,7 @@ def _provider_view(db: Session, user_id: int) -> list[AccountProviderStatus]:
 
 def _account_out(db: Session, user: User) -> AccountOut:
     return AccountOut(
-        email=user.email,
+        username=user.username,
         is_admin=user.is_admin,
         can_live=user.is_admin or _has_any_key(db, user.id),
         live_cap_default_usd=float(settings.LIVE_CAP_DEFAULT_USD),

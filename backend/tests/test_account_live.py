@@ -13,7 +13,7 @@ def _mk_key(client, **over):
 
 
 def test_attach_provider_key_encrypted_and_masked(signup):
-    c, _ = signup("owner@example.com")
+    c, _ = signup("owner_user")
 
     r = c.put("/api/account/providers/openai/key", json={"api_key": "sk-my-own-secret-9999"})
     assert r.status_code == 200 and r.json()["last4"] == "9999"
@@ -41,8 +41,8 @@ def test_attach_provider_key_encrypted_and_masked(signup):
 
 
 def test_provider_key_is_per_account(signup):
-    a, _ = signup("a@example.com")
-    b, _ = signup("b@example.com")
+    a, _ = signup("a_user")
+    b, _ = signup("b_user")
     a.put("/api/account/providers/openai/key", json={"api_key": "sk-a-key-1111"})
 
     b_acct = b.get("/api/account").json()
@@ -54,7 +54,7 @@ def test_provider_key_is_per_account(signup):
 
 
 def test_allow_live_requires_a_provider_key(signup):
-    c, _ = signup("live@example.com")
+    c, _ = signup("live_user")
 
     k = _mk_key(c, allow_live=True)
     assert k["allow_live"] is False  # no provider key yet -> forced simulated
@@ -68,7 +68,7 @@ def test_allow_live_requires_a_provider_key(signup):
 
 
 def test_allow_live_gated_on_the_keys_own_providers(signup):
-    c, _ = signup("mismatch@example.com")
+    c, _ = signup("mismatch_user")
     c.put("/api/account/providers/anthropic/key", json={"api_key": "sk-ant-mine-1234"})
 
     # only anthropic is configured; an openai-only key can't go live
@@ -116,7 +116,7 @@ def _cap(acct, provider):
 
 
 def test_provider_cap_set_and_clear(signup):
-    c, _ = signup("cap@example.com")
+    c, _ = signup("cap_user")
     acct = c.get("/api/account").json()
     assert acct["live_cap_default_usd"] == 5.0
     assert "live_cap_max_usd" not in acct  # no hard ceiling anymore
@@ -141,13 +141,13 @@ def test_env_var_blocks_account_key(signup, monkeypatch):
     from app.config import settings
 
     monkeypatch.setattr(settings, "OPENROUTER_API_KEY", "sk-env-key-0000")
-    c, _ = signup("env@example.com")
+    c, _ = signup("env_user")
     r = c.put("/api/account/providers/openrouter/key", json={"api_key": "sk-x-12345678"})
     assert r.status_code == 409
 
 
 def test_live_spend_cap_is_per_provider(signup):
-    c, _ = signup("spend@example.com")
+    c, _ = signup("spend_user")
     c.put("/api/account/providers/openrouter/key", json={"api_key": "sk-or-v1-teamkey"})
     c.put("/api/account/providers/anthropic/key", json={"api_key": "sk-ant-mine-2"})
     c.patch("/api/account/providers/openrouter/cap", json={"monthly_cap_usd": 1})
@@ -191,7 +191,7 @@ def test_live_spend_cap_is_per_provider(signup):
 
 
 def test_clear_provider_key_drops_can_live(signup):
-    c, _ = signup("clr@example.com")
+    c, _ = signup("clr_user")
     c.put("/api/account/providers/openai/key", json={"api_key": "sk-tmp-key-4321"})
     assert c.get("/api/account").json()["can_live"] is True
     assert c.delete("/api/account/providers/openai/key").json()["provider"] == "openai"

@@ -85,18 +85,23 @@ def _migrate(db: Session) -> None:
         db.execute(text("ALTER TABLE users DROP COLUMN IF EXISTS live_cap_usd"))
         db.commit()
 
+    # v5: sign up with a username, not an email (no email verification anyway)
+    if _has_col(db, "users", "email") and not _has_col(db, "users", "username"):
+        db.execute(text("ALTER TABLE users RENAME COLUMN email TO username"))
+        db.commit()
+
 
 def bootstrap(db: Session) -> None:
     _migrate(db)
 
     # admin account, from env
     admin = db.scalar(select(User).where(User.is_admin.is_(True)))
-    email = settings.ADMIN_USERNAME.strip() or "admin"
+    username = (settings.ADMIN_USERNAME.strip() or "admin").lower()
     pw_hash = hash_password(settings.ADMIN_PASSWORD) if settings.ADMIN_PASSWORD else ""
     if admin is None:
-        db.add(User(email=email, password_hash=pw_hash, is_admin=True))
+        db.add(User(username=username, password_hash=pw_hash, is_admin=True))
     else:
-        admin.email = email
+        admin.username = username
         if settings.ADMIN_PASSWORD:
             admin.password_hash = pw_hash
     db.commit()

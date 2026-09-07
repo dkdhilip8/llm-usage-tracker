@@ -8,7 +8,7 @@ OpenAI · Anthropic · OpenRouter · Google Gemini.
 > simulator — no provider calls, no cost — so you can wire keys and dashboards up before any
 > real spend. Live calls are opt-in per key (see *Per-account live mode*).
 >
-> **Multi-tenant.** Each person **signs up** (email + password, scrypt-hashed) and gets their
+> **Multi-tenant.** Each person **signs up** (username + password, scrypt-hashed) and gets their
 > own virtual keys, a Playground, and a private dashboard scoped to their usage. Sign-in is
 > required — Dashboard / Requests / Playground / Account all need a session. One privileged
 > **admin** account (`ADMIN_USERNAME` + `ADMIN_PASSWORD`, or the `X-Admin-Token` header for
@@ -23,8 +23,8 @@ OpenAI · Anthropic · OpenRouter · Google Gemini.
 > account**. A key with no configured provider stays **simulated**.
 >
 > **Abuse controls:** `MAX_USERS`, signups/IP/hour, per-account caps on keys / stored usage
-> rows / requests-per-hour, and the server-enforced per-provider live-spend cap. No email
-> verification or password reset yet.
+> rows / requests-per-hour, and the server-enforced per-provider live-spend cap. No password
+> reset yet.
 >
 > **Provider keys** normally come from server env vars only. Outside production an admin can set
 > `ALLOW_DB_PROVIDER_KEYS=true` and paste keys in the UI — stored **AES-encrypted** in the DB,
@@ -218,16 +218,16 @@ admin → all.
 |---|---|---|---|
 | GET | `/healthz` | — | health / warmup (`{version, live_enabled, db_keys_enabled}`) |
 | GET | `/api/models` | — | configured pricing table (per provider/model) |
-| POST | `/api/auth/signup` `\|` `/login` | — | `{email, password}` → sets `httpOnly` session cookie, `{authenticated, user:{id,email,is_admin,can_live}}` |
+| POST | `/api/auth/signup` `\|` `/login` | — | `{username, password}` → sets `httpOnly` session cookie, `{authenticated, user:{id,username,is_admin,can_live}}` |
 | POST `\|` GET | `/api/auth/logout` `\|` `/me` | — | clear the cookie / current principal |
 | DELETE `\|` DELETE | `/api/account/data` `\|` `/api/account` | user | wipe my keys+usage / delete my account |
-| GET | `/api/account` | user | my account: `email`, `can_live`, `live_cap_default_usd`, and `providers[]` (`source`, `last4`, `monthly_cap_usd`, `spend_this_month`) |
+| GET | `/api/account` | user | my account: `username`, `can_live`, `live_cap_default_usd`, and `providers[]` (`source`, `last4`, `monthly_cap_usd`, `spend_this_month`) |
 | PUT `\|` DELETE | `/api/account/providers/{provider}/key` | user | attach / clear **my own** encrypted provider key. `409` if a server env var is set for that provider |
 | PATCH | `/api/account/providers/{provider}/cap` | user | set `{monthly_cap_usd}` for that provider (`null` clears → the default). `404` unless a key for that provider is attached |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured, valid, source, last4, checked_at}]` (`?refresh=true` to re-check) |
 | PUT `\|` DELETE | `/api/providers/{provider}/key` | admin | set / clear a DB-stored (encrypted) provider key. `404` unless `ALLOW_DB_PROVIDER_KEYS`; `409` if a server env var is set for that provider |
 | POST | `/api/keys` | user | `{label, allowed_providers[], allow_live?(needs a configured provider key), default_provider?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
-| GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | user | list *your* keys (admin: all, + `owner_email`) / patch / revoke |
+| GET `\|` PATCH `\|` DELETE | `/api/keys[/{id}]` | user | list *your* keys (admin: all, + `owner_username`) / patch / revoke |
 | GET | `/api/requests` | user *(scoped)* | recent request log (`?limit&cursor&provider&model&key_id&status&mode&start&end`) |
 | **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget, `403` provider not on key. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + per-provider `mode` (`simulated`/`live`) |
@@ -241,7 +241,7 @@ viewer-scoped (user → their own, admin → all). The proxy (`/v1/*`) requires 
 
 ## Data model
 
-- **users** — `id, email (unique), password_hash (scrypt), is_admin, created_at`. The admin row
+- **users** — `id, username (unique), password_hash (scrypt), is_admin, created_at`. The admin row
   is created/updated from `ADMIN_USERNAME`/`ADMIN_PASSWORD` on boot. Sessions are a stateless
   HMAC-signed cookie carrying the user id.
 - **virtual_keys** — `id, user_id → users, label, key_hash, key_prefix, allow_live,

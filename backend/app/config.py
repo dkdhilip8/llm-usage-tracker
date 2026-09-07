@@ -19,7 +19,7 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
 
     # ---- admin account (the one is_admin=True user, created/updated on boot) ----
-    ADMIN_USERNAME: str = "admin"  # also the admin user's login email
+    ADMIN_USERNAME: str = "admin"  # the admin user's login username
     # Empty => admin password login disabled (the X-Admin-Token header still works).
     # Required (min 12 chars) when ENVIRONMENT is deployed.
     ADMIN_PASSWORD: str = ""
@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     # real. Tests set this false for speed.
     SIMULATE_LATENCY_SLEEP: bool = True
 
-    VERSION: str = "0.9.1"
+    VERSION: str = "0.9.2"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":

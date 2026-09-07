@@ -117,12 +117,12 @@ def signup():
     """Create an isolated logged-in user; returns (its own TestClient, user dict)."""
     n = {"i": 0}
 
-    def _make(email: str | None = None, password: str = "pw-abcdefgh") -> tuple:
+    def _make(username: str | None = None, password: str = "pw-abcdefgh") -> tuple:
         n["i"] += 1
         c = TestClient(app)
         r = c.post(
             "/api/auth/signup",
-            json={"email": email or f"u{n['i']}@example.com", "password": password},
+            json={"username": username or f"user{n['i']}", "password": password},
         )
         assert r.status_code == 200, r.text
         return c, r.json()["user"]

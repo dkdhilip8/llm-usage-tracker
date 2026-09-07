@@ -537,7 +537,7 @@ export function Account() {
           <h1 className="text-lg font-semibold text-fg">
             {isAdmin ? "Gateway admin" : "Your account"}
           </h1>
-          <div className="text-xs text-fg-subtle">{user?.email}</div>
+          <div className="text-xs text-fg-subtle">{user?.username}</div>
         </div>
         <button
           onClick={() => {
@@ -600,7 +600,7 @@ export function Account() {
                   <td className="py-2 pr-4 font-mono text-xs">{k.key_prefix}…</td>
                   {isAdmin && (
                     <td className="py-2 pr-4 text-xs text-fg-subtle">
-                      {k.owner_email ?? "—"}
+                      {k.owner_username ?? "—"}
                     </td>
                   )}
                   <td className="py-2 pr-4">
