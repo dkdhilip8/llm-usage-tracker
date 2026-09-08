@@ -1,9 +1,10 @@
+import warnings
+
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # Built-in development defaults. Fine locally; refused when ENVIRONMENT is a
-# deployed one (see _reject_dev_secrets_when_deployed).
-_DEV_ADMIN_TOKEN = "dev-admin-token"
+# deployed one (see _validate_deployment).
 _DEV_SECRET_KEY = "dev-secret"
 _DEPLOYED_ENVS = {"production", "prod", "staging"}
 
@@ -18,48 +19,45 @@ class Settings(BaseSettings):
     # usable; a deployed value (production/staging) makes them a hard startup error.
     ENVIRONMENT: str = "development"
 
-    # ---- admin account (the one is_admin=True user, created/updated on boot) ----
-    ADMIN_USERNAME: str = "admin"  # the admin user's login username
-    # Empty => admin password login disabled (the X-Admin-Token header still works).
-    # Required (min 12 chars) when ENVIRONMENT is deployed.
-    ADMIN_PASSWORD: str = ""
     # Signed session-cookie lifetime.
     SESSION_TTL_HOURS: int = 168
 
-    # ---- multi-tenant signup + per-account abuse caps ----
+    # ---- signup + workspaces + per-tenant abuse caps ----
     ALLOW_SIGNUP: bool = True
-    MAX_USERS: int = 300  # reject signup past this many accounts
+    MAX_USERS: int = 300  # reject signup past this many accounts (whole instance)
     SIGNUPS_PER_IP_PER_HOUR: int = 5
-    MAX_KEYS_PER_USER: int = 10
-    MAX_USAGE_ROWS_PER_USER: int = 4000  # proxy stops recording past this
-    PLAYGROUND_REQUESTS_PER_HOUR: int = 120
+    JOINS_PER_IP_PER_HOUR: int = 10
+    MAX_WORKSPACES: int = 200
+    MAX_MEMBERS_PER_WORKSPACE: int = 25
+    MAX_KEYS_PER_WORKSPACE: int = 25
+    MAX_OPEN_INVITES_PER_WORKSPACE: int = 50
+    INVITE_TTL_DAYS: int = 14
+    MAX_USAGE_ROWS_PER_WORKSPACE: int = 20000  # proxy stops recording past this
+    PLAYGROUND_REQUESTS_PER_HOUR: int = 120  # per workspace
 
-    # ---- live mode: attach your own provider key(s) + a monthly cap per provider ----
+    # ---- live mode: a workspace attaches its own provider key(s) + a monthly cap per provider ----
     ALLOW_LIVE_KEYS: bool = True
     # Default monthly live-spend cap for a provider whose key has no explicit cap.
     LIVE_CAP_DEFAULT_USD: float = 5.0
 
-    # ---- provider-credential encryption (only used when ALLOW_DB_PROVIDER_KEYS) ----
-    # A urlsafe-base64 32-byte Fernet key. Empty => derived from SECRET_KEY.
+    # ---- provider-credential encryption ----
+    # A urlsafe-base64 32-byte Fernet key. Empty => derived from SECRET_KEY (a
+    # deployed environment should set this explicitly so rotating SECRET_KEY does
+    # not orphan stored provider keys).
     ENCRYPTION_KEY: str = ""
-    # Let an admin store provider API keys in the DB (encrypted) via the UI.
-    # HARD-BLOCKED in a deployed ENVIRONMENT — deployed hosts use server env vars only.
-    ALLOW_DB_PROVIDER_KEYS: bool = False
 
     # Postgres. Render/Neon hand out `postgres://` or `postgresql://`; `sqlalchemy_url`
     # rewrites the scheme to the psycopg3 driver.
     DATABASE_URL: str = "postgresql+psycopg://llm:llm@localhost:5432/llmtracker"
 
-    # Shared secret for the admin API (create/list/revoke keys). Sent as `X-Admin-Token`.
-    ADMIN_TOKEN: str = "dev-admin-token"
-
-    # HMAC pepper for virtual-key hashing. Never stored alongside the hash.
+    # HMAC pepper for virtual-key hashing + session-cookie signing. Never stored
+    # alongside the hash.
     SECRET_KEY: str = "dev-secret"
 
     # Comma-separated origins for local dev (Vite on :5173). Empty in prod (same origin).
     CORS_ORIGINS: str = ""
 
-    # ---- provider credentials (server-side only; never in the DB or UI) ----
+    # ---- provider credentials (server-side; a workspace key can also be attached in-app) ----
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     OPENROUTER_API_KEY: str = ""
@@ -81,7 +79,7 @@ class Settings(BaseSettings):
     # real. Tests set this false for speed.
     SIMULATE_LATENCY_SLEEP: bool = True
 
-    VERSION: str = "0.9.2"
+    VERSION: str = "0.10.0"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":
@@ -89,22 +87,18 @@ class Settings(BaseSettings):
         if self.ENVIRONMENT.strip().lower() not in _DEPLOYED_ENVS:
             return self
         errors = []
-        if self.ADMIN_TOKEN == _DEV_ADMIN_TOKEN:
-            errors.append("ADMIN_TOKEN is still the built-in development default")
         if self.SECRET_KEY == _DEV_SECRET_KEY:
             errors.append("SECRET_KEY is still the built-in development default")
-        if not self.ADMIN_PASSWORD:
-            errors.append("ADMIN_PASSWORD must be set (admin login front door)")
-        elif len(self.ADMIN_PASSWORD) < 12:
-            errors.append("ADMIN_PASSWORD must be at least 12 characters")
-        if self.ALLOW_DB_PROVIDER_KEYS:
-            errors.append(
-                "ALLOW_DB_PROVIDER_KEYS must be off in a deployed environment — "
-                "use server env vars for provider credentials"
-            )
         if errors:
             raise ValueError(
                 f"ENVIRONMENT={self.ENVIRONMENT!r}: " + "; ".join(errors)
+            )
+        if not self.ENCRYPTION_KEY:
+            warnings.warn(
+                "ENCRYPTION_KEY is not set — encryption falls back to a key derived "
+                "from SECRET_KEY. Set ENCRYPTION_KEY explicitly so rotating "
+                "SECRET_KEY does not orphan stored provider keys.",
+                stacklevel=2,
             )
         return self
 

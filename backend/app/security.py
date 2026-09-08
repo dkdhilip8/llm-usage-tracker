@@ -86,20 +86,12 @@ def read_session(cookie: str) -> int | None:
     return int(uid)
 
 
-def _token_ok(x_admin_token: str) -> bool:
-    return bool(x_admin_token) and secrets.compare_digest(x_admin_token, settings.ADMIN_TOKEN)
-
-
 # ---- principal resolution ----
 def current_user(
-    x_admin_token: str = Header(default=""),
     session: str = Cookie(default="", alias=SESSION_COOKIE),
     db: Session = Depends(get_db),
 ) -> User | None:
-    """The signed-in account, or None. Not a gate. The X-Admin-Token header
-    resolves to the admin user row."""
-    if _token_ok(x_admin_token):
-        return db.scalar(select(User).where(User.is_admin.is_(True)))
+    """The signed-in account, or None. Not a gate."""
     uid = read_session(session)
     if uid is not None:
         return db.get(User, uid)
@@ -109,12 +101,6 @@ def current_user(
 def require_user(user: User | None = Depends(current_user)) -> User:
     if user is None:
         raise HTTPException(status_code=401, detail="sign in required")
-    return user
-
-
-def require_admin(user: User | None = Depends(current_user)) -> User:
-    if user is None or not user.is_admin:
-        raise HTTPException(status_code=403, detail="admin only")
     return user
 
 

@@ -17,7 +17,7 @@ import { UsageByModelChart } from "../components/UsageByModelChart";
 import { KeyUsageTable } from "../components/KeyUsageTable";
 
 export function Dashboard() {
-  const { isAdmin } = useAuth();
+  const { isWorkspaceAdmin, workspace } = useAuth();
   const [filters, setFilters] = useState<Filters>(defaultFilters);
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [summary, setSummary] = useState<UsageSummary | null>(null);
@@ -61,14 +61,16 @@ export function Dashboard() {
     api.usageByKey("").then(setAllKeys).catch(() => setAllKeys([]));
   }, []);
 
-  const scopeLabel = isAdmin ? "all accounts" : "your account";
+  const scopeLabel = isWorkspaceAdmin
+    ? `workspace: ${workspace?.name ?? ""}`
+    : "your assigned keys";
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-lg font-semibold text-fg">
-            {isAdmin ? "Organization LLM usage" : "LLM usage"}
+            {isWorkspaceAdmin ? "Workspace LLM usage" : "LLM usage"}
           </h1>
           <div className="text-xs text-fg-subtle">Showing: {scopeLabel}</div>
         </div>

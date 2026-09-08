@@ -12,7 +12,7 @@ export function Login() {
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  if (authenticated) return <Navigate to="/account" replace />;
+  if (authenticated) return <Navigate to="/dashboard" replace />;
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -21,7 +21,7 @@ export function Login() {
     try {
       if (mode === "signup") await signup(username.trim().toLowerCase(), password);
       else await login(username.trim().toLowerCase(), password);
-      navigate("/account", { replace: true });
+      navigate("/dashboard", { replace: true });
     } catch (e) {
       setErr((e as Error).message);
     } finally {
@@ -34,8 +34,8 @@ export function Login() {
       <Card title={mode === "signup" ? "Create an account" : "Sign in"}>
         <p className="mb-3 text-sm text-fg-muted">
           {mode === "signup"
-            ? "Create your own virtual keys, mint them for teammates, and track usage and cost on a private dashboard."
-            : "Sign in to manage your virtual keys, use the Playground, and see your usage and cost."}
+            ? "Create an account, then start a workspace for your team or join one with an invite code."
+            : "Sign in to your workspace — usage, virtual keys, and cost tracking."}
         </p>
         <form onSubmit={submit} className="space-y-3">
           <label className="block text-xs font-medium text-fg-muted">

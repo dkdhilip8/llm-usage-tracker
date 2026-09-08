@@ -6,19 +6,16 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.gateway import any_live_key, period_spend
+from app.gateway import period_spend, workspace_has_live_provider
 from app.models import AllowedProvider, UsageLog, User, VirtualKey
 from app.providers import SUPPORTED
 from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUpdate
-from app.security import new_key, require_user
+from app.security import new_key
+from app.workspace import Membership, require_membership, require_workspace_admin
 
-# Any signed-in user manages their own keys; admin sees/edits everyone's.
+# Workspace Admin manages every key in the workspace; a Team Member only sees the
+# key(s) assigned to them (read-only).
 router = APIRouter(prefix="/api/keys", tags=["keys"])
-
-
-def _visible_user_ids(db: Session, user: User) -> list[int] | None:
-    """User ids whose keys `user` may see/manage. None = all (admin)."""
-    return None if user.is_admin else [user.id]
 
 
 def _validate_providers(names: list[str]) -> list[str]:
@@ -45,34 +42,44 @@ def _custom_window(body) -> tuple[datetime, datetime]:
     return start, end
 
 
-def _owned(db: Session, key_id: int, user: User) -> VirtualKey:
+def _in_workspace(db: Session, key_id: int, m: Membership) -> VirtualKey:
     vk = db.get(VirtualKey, key_id)
-    if vk is None:
-        raise HTTPException(404, "key not found")
-    visible = _visible_user_ids(db, user)
-    if visible is not None and vk.user_id not in visible:
-        raise HTTPException(404, "key not found")  # don't reveal other users' key ids
+    if vk is None or vk.workspace_id != m.workspace_id:
+        raise HTTPException(404, "key not found")  # don't reveal other workspaces' key ids
     return vk
+
+
+def _resolve_assignee(db: Session, m: Membership, assigned_user_id: int | None) -> int | None:
+    if assigned_user_id is None:
+        return None
+    u = db.get(User, assigned_user_id)
+    if u is None or u.workspace_id != m.workspace_id or u.workspace_role != "member":
+        raise HTTPException(422, "assigned_user_id must be a Team Member of this workspace")
+    return u.id
 
 
 @router.post("", response_model=KeyCreated)
 def create_key(
-    body: KeyCreate, db: Session = Depends(get_db), user: User = Depends(require_user)
+    body: KeyCreate,
+    db: Session = Depends(get_db),
+    m: Membership = Depends(require_workspace_admin),
 ) -> KeyCreated:
     label = body.label.strip()
     if not label:
         raise HTTPException(422, "label is required")
-    if not user.is_admin:
-        owned = db.scalar(
-            select(func.count()).select_from(VirtualKey).where(VirtualKey.user_id == user.id)
+    owned = db.scalar(
+        select(func.count())
+        .select_from(VirtualKey)
+        .where(VirtualKey.workspace_id == m.workspace_id)
+    )
+    if (owned or 0) >= settings.MAX_KEYS_PER_WORKSPACE:
+        raise HTTPException(
+            409, f"key limit reached ({settings.MAX_KEYS_PER_WORKSPACE} per workspace)"
         )
-        if (owned or 0) >= settings.MAX_KEYS_PER_USER:
-            raise HTTPException(
-                409, f"key limit reached ({settings.MAX_KEYS_PER_USER} per account)"
-            )
     providers = _validate_providers(body.allowed_providers)
     if body.default_provider and body.default_provider not in providers:
         raise HTTPException(422, "default_provider must be one of allowed_providers")
+    assignee = _resolve_assignee(db, m, body.assigned_user_id)
 
     b_start = b_end = None
     if body.budget_period == "custom":
@@ -80,13 +87,15 @@ def create_key(
 
     raw, hashed, prefix = new_key()
     vk = VirtualKey(
-        user_id=user.id,
+        workspace_id=m.workspace_id,
+        assigned_user_id=assignee,
         label=label,
         key_hash=hashed,
         key_prefix=prefix,
-        # live mode needs a real provider key (env / admin-global / attached) for
-        # one of this key's providers; call-time still checks the account's cap
-        allow_live=bool(body.allow_live) and any_live_key(db, user.id, providers),
+        # live mode needs a real provider key (env var or workspace-attached) for
+        # one of this key's providers; call-time still checks the workspace cap
+        allow_live=bool(body.allow_live)
+        and workspace_has_live_provider(db, m.workspace_id, providers),
         default_provider=body.default_provider,
         monthly_budget_usd=body.monthly_budget_usd,
         budget_period=body.budget_period,
@@ -102,7 +111,7 @@ def create_key(
 
 @router.get("", response_model=list[KeyOut])
 def list_keys(
-    db: Session = Depends(get_db), user: User = Depends(require_user)
+    db: Session = Depends(get_db), m: Membership = Depends(require_membership)
 ) -> list[KeyOut]:
     rollup = {
         row[0]: (row[1], int(row[2]), float(row[3]))
@@ -115,14 +124,15 @@ def list_keys(
             ).group_by(UsageLog.key_id)
         ).all()
     }
-    visible = _visible_user_ids(db, user)
-    stmt = select(VirtualKey).order_by(VirtualKey.created_at.desc())
-    if visible is not None:
-        stmt = stmt.where(VirtualKey.user_id.in_(visible))
-    keys = db.scalars(stmt).all()
-    # only admin sees more than one account's keys, so only admin needs owner usernames
-    multi = user.is_admin
-    usernames = {u.id: u.username for u in db.scalars(select(User))} if multi else {}
+    stmt = select(VirtualKey).where(VirtualKey.workspace_id == m.workspace_id)
+    if not m.is_admin:
+        stmt = stmt.where(VirtualKey.assigned_user_id == m.user_id)
+    keys = db.scalars(stmt.order_by(VirtualKey.created_at.desc())).all()
+    names = (
+        {u.id: u.username for u in db.scalars(select(User).where(User.workspace_id == m.workspace_id))}
+        if m.is_admin
+        else {}
+    )
     out: list[KeyOut] = []
     for k in keys:
         requests, total_tokens, cost = rollup.get(k.id, (0, 0, 0.0))
@@ -131,7 +141,7 @@ def list_keys(
                 id=k.id,
                 label=k.label,
                 key_prefix=k.key_prefix,
-                owner_username=usernames.get(k.user_id) if multi else None,
+                assigned_username=names.get(k.assigned_user_id) if m.is_admin else None,
                 allowed_providers=k.provider_names(),
                 allow_live=k.allow_live,
                 default_provider=k.default_provider,
@@ -153,11 +163,20 @@ def list_keys(
 
 @router.patch("/{key_id}")
 def update_key(
-    key_id: int, body: KeyUpdate, db: Session = Depends(get_db), user: User = Depends(require_user)
+    key_id: int,
+    body: KeyUpdate,
+    db: Session = Depends(get_db),
+    m: Membership = Depends(require_workspace_admin),
 ) -> dict:
-    vk = _owned(db, key_id, user)
+    vk = _in_workspace(db, key_id, m)
     if body.allow_live is not None:
-        vk.allow_live = bool(body.allow_live) and any_live_key(db, user.id, vk.provider_names())
+        vk.allow_live = bool(body.allow_live) and workspace_has_live_provider(
+            db, m.workspace_id, vk.provider_names()
+        )
+    if body.clear_assignment:
+        vk.assigned_user_id = None
+    elif body.assigned_user_id is not None:
+        vk.assigned_user_id = _resolve_assignee(db, m, body.assigned_user_id)
     if body.default_provider is not None:
         if body.default_provider and body.default_provider not in vk.provider_names():
             raise HTTPException(422, "default_provider must be one of allowed_providers")
@@ -176,6 +195,7 @@ def update_key(
     return {
         "id": vk.id,
         "allow_live": vk.allow_live,
+        "assigned_user_id": vk.assigned_user_id,
         "default_provider": vk.default_provider,
         "monthly_budget_usd": _budget(vk.monthly_budget_usd),
         "budget_period": vk.budget_period,
@@ -186,9 +206,11 @@ def update_key(
 
 @router.delete("/{key_id}")
 def revoke_key(
-    key_id: int, db: Session = Depends(get_db), user: User = Depends(require_user)
+    key_id: int,
+    db: Session = Depends(get_db),
+    m: Membership = Depends(require_workspace_admin),
 ) -> dict:
-    vk = _owned(db, key_id, user)
+    vk = _in_workspace(db, key_id, m)
     if vk.revoked_at is None:
         vk.revoked_at = datetime.now(UTC)
         db.commit()

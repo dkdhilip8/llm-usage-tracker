@@ -1,7 +1,7 @@
 """Provider credentials, liveness checks (cached), and real upstream calls.
 
-Credentials resolve as: server env var wins; otherwise, only when
-ALLOW_DB_PROVIDER_KEYS is on, an admin-entered key decrypted from the DB. Live
+A server env var configures a provider instance-wide (usable by every workspace);
+a workspace can also attach its own key (resolved in gateway.live_key_for). Live
 calls are dormant unless ENABLE_LIVE is set AND the calling virtual key has
 allow_live AND the provider is configured & reachable."""
 
@@ -10,8 +10,6 @@ import time
 from collections.abc import Iterator
 
 import httpx
-from sqlalchemy import select
-from sqlalchemy.orm import Session
 
 from app.config import settings
 
@@ -44,29 +42,20 @@ _CHAT_URLS = {
 
 # provider -> (valid: bool, checked_at: epoch seconds)
 _cache: dict[str, tuple[bool, float]] = {}
-# provider -> decrypted admin-entered key (only populated when ALLOW_DB_PROVIDER_KEYS)
-_db_keys: dict[str, str] = {}
 
 
 def resolved_key(provider: str) -> str:
-    """Server env var wins; otherwise the DB key (if that feature is on)."""
-    env = settings.provider_api_key(provider)
-    if env:
-        return env
-    if settings.ALLOW_DB_PROVIDER_KEYS:
-        return _db_keys.get(provider, "")
-    return ""
+    """The instance-wide server env var for this provider, if any."""
+    return settings.provider_api_key(provider)
 
 
 def key_source(provider: str) -> str:
-    if settings.provider_api_key(provider):
-        return "env"
-    if settings.ALLOW_DB_PROVIDER_KEYS and _db_keys.get(provider):
-        return "db"
-    return "none"
+    return "env" if settings.provider_api_key(provider) else "none"
 
 
 def is_configured(provider: str) -> bool:
+    """True when a server env var configures this provider instance-wide. A
+    workspace's own attached key is resolved separately in gateway.live_key_for."""
     return bool(resolved_key(provider))
 
 
@@ -75,65 +64,6 @@ def _auth_headers(provider: str, key: str | None = None) -> dict[str, str]:
     if provider == "anthropic":
         return {"x-api-key": key, "anthropic-version": "2023-06-01"}
     return {"Authorization": f"Bearer {key}"}
-
-
-# ---- admin-global DB-stored keys (encrypted; user_id NULL) ----
-def load_db_keys(db: Session) -> None:
-    """Refresh the in-process decrypted-key cache from the admin-global rows."""
-    _db_keys.clear()
-    if not settings.ALLOW_DB_PROVIDER_KEYS:
-        return
-    from app.crypto import decrypt
-    from app.models import ProviderCredential
-
-    for row in db.scalars(
-        select(ProviderCredential).where(ProviderCredential.user_id.is_(None))
-    ):
-        plain = decrypt(row.ciphertext)
-        if plain:
-            _db_keys[row.provider] = plain
-
-
-def _global_row(db: Session, provider: str):
-    from app.models import ProviderCredential
-
-    return db.scalar(
-        select(ProviderCredential).where(
-            ProviderCredential.user_id.is_(None),
-            ProviderCredential.provider == provider,
-        )
-    )
-
-
-def set_db_key(db: Session, provider: str, api_key: str) -> str:
-    """Encrypt + upsert the admin-global key. Returns its last 4 chars."""
-    from app.crypto import encrypt
-    from app.models import ProviderCredential
-
-    last4 = api_key[-4:]
-    row = _global_row(db, provider)
-    if row is None:
-        db.add(
-            ProviderCredential(
-                user_id=None, provider=provider, ciphertext=encrypt(api_key), last4=last4
-            )
-        )
-    else:
-        row.ciphertext = encrypt(api_key)
-        row.last4 = last4
-    db.commit()
-    _db_keys[provider] = api_key
-    _cache.pop(provider, None)  # force a fresh liveness check
-    return last4
-
-
-def clear_db_key(db: Session, provider: str) -> None:
-    row = _global_row(db, provider)
-    if row is not None:
-        db.delete(row)
-        db.commit()
-    _db_keys.pop(provider, None)
-    _cache.pop(provider, None)
 
 
 def check_key(provider: str, api_key: str) -> bool:

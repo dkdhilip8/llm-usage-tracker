@@ -10,7 +10,7 @@ from starlette.types import Scope
 from app import providers
 from app.config import settings
 from app.db import Base, SessionLocal, engine
-from app.routers import account, auth, keys, openai_compat, proxy, usage
+from app.routers import account, auth, keys, openai_compat, proxy, usage, workspace
 from app.routers import providers as providers_router
 from app.routers import requests as requests_router
 
@@ -38,8 +38,7 @@ async def lifespan(_: FastAPI):
     with SessionLocal() as db:
         from app.bootstrap import bootstrap
 
-        bootstrap(db)  # schema migration + the admin user row
-        providers.load_db_keys(db)  # decrypt any admin-entered provider keys
+        bootstrap(db)  # schema migration
     providers.warm_cache()  # best-effort liveness check for any configured provider
     yield
 
@@ -66,12 +65,12 @@ def healthz() -> dict:
         "status": "ok",
         "version": settings.VERSION,
         "live_enabled": settings.ENABLE_LIVE,
-        "db_keys_enabled": settings.ALLOW_DB_PROVIDER_KEYS,
     }
 
 
 app.include_router(auth.router)
 app.include_router(account.router)
+app.include_router(workspace.router)
 app.include_router(keys.router)
 app.include_router(proxy.router)
 app.include_router(openai_compat.router)

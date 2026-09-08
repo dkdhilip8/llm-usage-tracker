@@ -7,12 +7,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { api, type AuthUser } from "./api";
+import { api, type AuthUser, type WorkspaceRef, type WorkspaceRole } from "./api";
 
 interface AuthCtx {
   user: AuthUser | null;
   authenticated: boolean;
-  isAdmin: boolean;
+  workspace: WorkspaceRef | null;
+  role: WorkspaceRole | null;
+  inWorkspace: boolean;
+  isWorkspaceAdmin: boolean;
   loading: boolean;
   login: (username: string, password: string) => Promise<void>;
   signup: (username: string, password: string) => Promise<void>;
@@ -54,19 +57,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
   }, []);
 
-  const value = useMemo<AuthCtx>(
-    () => ({
+  const value = useMemo<AuthCtx>(() => {
+    const workspace = user?.workspace ?? null;
+    return {
       user,
       authenticated: user !== null,
-      isAdmin: !!user?.is_admin,
+      workspace,
+      role: workspace?.role ?? null,
+      inWorkspace: workspace !== null,
+      isWorkspaceAdmin: workspace?.role === "admin",
       loading,
       login,
       signup,
       logout,
       refresh,
-    }),
-    [user, loading, login, signup, logout, refresh],
-  );
+    };
+  }, [user, loading, login, signup, logout, refresh]);
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

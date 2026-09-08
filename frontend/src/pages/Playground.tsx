@@ -77,7 +77,7 @@ export function Playground() {
   if (currentProvider && currentMode === "simulated") {
     if (!liveEnabled) simReason = "server has ENABLE_LIVE off";
     else if (!inspect?.allow_live)
-      simReason = 'this key is not "allow live" — toggle it on the Account page';
+      simReason = 'this key is not "allow live" — toggle it on the Workspace page';
     else if (!currentProvider.configured)
       simReason = `${provider} has no server API key configured`;
     else if (!currentProvider.valid)
@@ -107,7 +107,7 @@ export function Playground() {
             Virtual key
             <input
               className="mt-1 w-full rounded-md border border-line px-2 py-1.5 font-mono text-xs"
-              placeholder="vk_…  (create one on the Account page)"
+              placeholder="vk_…  (create one on the Workspace page)"
               value={key}
               onChange={(e) => setKey(e.target.value)}
             />

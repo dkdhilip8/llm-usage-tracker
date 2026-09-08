@@ -21,6 +21,7 @@ async function req<T>(path: string, init: RequestInit = {}): Promise<T> {
 // ---- types ----
 export const PROVIDERS = ["openai", "anthropic", "openrouter", "gemini"] as const;
 export type Provider = (typeof PROVIDERS)[number];
+export type WorkspaceRole = "admin" | "member";
 
 export interface ModelInfo {
   provider: string;
@@ -29,38 +30,63 @@ export interface ModelInfo {
   output_per_1m: number;
 }
 
-export interface ProviderStatus {
+export interface ProviderEnvStatus {
   provider: string;
   env_var: string;
-  configured: boolean;
-  valid: boolean;
-  source: "env" | "db" | "none";
-  last4: string | null;
-  checked_at: string | null;
+  configured_via_env: boolean;
+}
+
+export interface WorkspaceRef {
+  id: number;
+  name: string;
+  role: WorkspaceRole;
 }
 
 export interface AuthUser {
   id: number;
   username: string;
-  is_admin: boolean;
-  can_live: boolean; // is_admin, or has attached their own provider key
-}
-
-export interface AccountProvider {
-  provider: string;
-  configured: boolean;
-  source: "env" | "account" | "none";
-  last4: string | null;
-  monthly_cap_usd: number | null; // null => the account default applies
-  spend_this_month: number; // live spend routed through this provider this month
+  workspace: WorkspaceRef | null;
 }
 
 export interface Account {
   username: string;
-  is_admin: boolean;
-  can_live: boolean;
-  live_cap_default_usd: number; // fallback cap when a provider has no explicit one
-  providers: AccountProvider[];
+  workspace: WorkspaceRef | null;
+  live_cap_default_usd: number;
+}
+
+export interface WorkspaceProvider {
+  provider: string;
+  configured: boolean;
+  source: "env" | "workspace" | "none";
+  last4: string | null;
+  monthly_cap_usd: number | null; // null => the default applies
+  spend_this_month: number;
+}
+
+export interface WorkspaceMember {
+  user_id: number;
+  username: string;
+  role: WorkspaceRole;
+  assigned_keys: number;
+  requests: number;
+  cost: number;
+}
+
+export interface WorkspaceInvite {
+  id: number;
+  code: string;
+  label: string | null;
+  created_at?: string;
+  expires_at: string;
+}
+
+export interface WorkspaceDetail {
+  id: number;
+  name: string;
+  role: WorkspaceRole;
+  members?: WorkspaceMember[];
+  invites?: WorkspaceInvite[];
+  providers?: WorkspaceProvider[];
 }
 
 export type BudgetPeriod = "day" | "week" | "month" | "custom";
@@ -69,7 +95,7 @@ export interface KeyRow {
   id: number;
   label: string;
   key_prefix: string;
-  owner_username: string | null;
+  assigned_username: string | null;
   allowed_providers: string[];
   allow_live: boolean;
   default_provider: string | null;
@@ -193,12 +219,7 @@ export interface ChatResult {
 
 export const api = {
   health: () =>
-    req<{
-      status: string;
-      version: string;
-      live_enabled: boolean;
-      db_keys_enabled: boolean;
-    }>("/healthz"),
+    req<{ status: string; version: string; live_enabled: boolean }>("/healthz"),
   models: () => req<ModelInfo[]>("/api/models"),
 
   // ---- auth ----
@@ -215,36 +236,56 @@ export const api = {
     }),
   logout: () => req<{ authenticated: boolean }>("/api/auth/logout", { method: "POST" }),
 
-  // ---- account self-service ----
-  clearMyData: () => req<{ cleared: boolean }>("/api/account/data", { method: "DELETE" }),
+  // ---- account (personal) ----
+  getAccount: () => req<Account>("/api/account"),
   deleteAccount: () => req<{ deleted: boolean }>("/api/account", { method: "DELETE" }),
 
-  // ---- live mode: your own provider keys, each with a monthly cap ----
-  getAccount: () => req<Account>("/api/account"),
-  setAccountProviderKey: (provider: string, apiKey: string) =>
+  // ---- workspace ----
+  getWorkspace: () => req<WorkspaceDetail>("/api/workspace"),
+  createWorkspace: (name: string) =>
+    req<WorkspaceDetail>("/api/workspace", {
+      method: "POST",
+      body: JSON.stringify({ name }),
+    }),
+  renameWorkspace: (name: string) =>
+    req<WorkspaceDetail>("/api/workspace", {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  deleteWorkspace: () => req<{ deleted: boolean }>("/api/workspace", { method: "DELETE" }),
+  leaveWorkspace: () => req<{ left: boolean }>("/api/workspace/leave", { method: "POST" }),
+  joinWorkspace: (code: string) =>
+    req<WorkspaceDetail>("/api/workspace/join", {
+      method: "POST",
+      body: JSON.stringify({ code }),
+    }),
+  createInvite: (label?: string) =>
+    req<WorkspaceInvite>("/api/workspace/invites", {
+      method: "POST",
+      body: JSON.stringify({ label: label?.trim() || null }),
+    }),
+  revokeInvite: (id: number) =>
+    req<{ revoked: boolean }>(`/api/workspace/invites/${id}`, { method: "DELETE" }),
+  removeMember: (userId: number) =>
+    req<{ removed: boolean }>(`/api/workspace/members/${userId}`, { method: "DELETE" }),
+  workspaceProviders: () => req<WorkspaceProvider[]>("/api/workspace/providers"),
+  setWorkspaceProviderKey: (provider: string, apiKey: string) =>
     req<{ provider: string; last4: string; valid: boolean }>(
-      `/api/account/providers/${provider}/key`,
+      `/api/workspace/providers/${provider}/key`,
       { method: "PUT", body: JSON.stringify({ api_key: apiKey }) },
     ),
-  clearAccountProviderKey: (provider: string) =>
-    req<{ provider: string }>(`/api/account/providers/${provider}/key`, { method: "DELETE" }),
-  setProviderCap: (provider: string, monthlyCapUsd: number | null) =>
-    req<Account>(`/api/account/providers/${provider}/cap`, {
+  clearWorkspaceProviderKey: (provider: string) =>
+    req<{ provider: string }>(`/api/workspace/providers/${provider}/key`, {
+      method: "DELETE",
+    }),
+  setWorkspaceProviderCap: (provider: string, monthlyCapUsd: number | null) =>
+    req<WorkspaceProvider[]>(`/api/workspace/providers/${provider}/cap`, {
       method: "PATCH",
       body: JSON.stringify({ monthly_cap_usd: monthlyCapUsd }),
     }),
 
-  providers: (refresh = false) =>
-    req<ProviderStatus[]>(`/api/providers${refresh ? "?refresh=true" : ""}`),
-  setProviderKey: (provider: string, apiKey: string) =>
-    req<{ provider: string; source: string; last4: string; valid: boolean }>(
-      `/api/providers/${provider}/key`,
-      { method: "PUT", body: JSON.stringify({ api_key: apiKey }) },
-    ),
-  clearProviderKey: (provider: string) =>
-    req<{ provider: string; source: string }>(`/api/providers/${provider}/key`, {
-      method: "DELETE",
-    }),
+  // ---- providers (instance-wide env status; admin) ----
+  providers: () => req<ProviderEnvStatus[]>("/api/providers"),
 
   usageSummary: (qs: string) => req<UsageSummary>(`/api/usage/summary${qs}`),
   usageTimeseries: (qs: string) => req<TimeseriesPoint[]>(`/api/usage/timeseries${qs}`),
@@ -262,6 +303,7 @@ export const api = {
     allowed_providers: string[];
     allow_live: boolean;
     default_provider?: string | null;
+    assigned_user_id?: number | null;
     monthly_budget_usd?: number | null;
     budget_period?: BudgetPeriod;
     budget_start?: string | null;
@@ -276,6 +318,8 @@ export const api = {
     patch: {
       allow_live?: boolean;
       default_provider?: string | null;
+      assigned_user_id?: number | null;
+      clear_assignment?: boolean;
       monthly_budget_usd?: number | null;
       budget_period?: BudgetPeriod;
       budget_start?: string | null;

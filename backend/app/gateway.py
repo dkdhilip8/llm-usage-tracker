@@ -18,23 +18,19 @@ from sqlalchemy.orm import Session
 from app import providers
 from app.config import settings
 from app.db import SessionLocal
-from app.models import UsageLog, User, VirtualKey
+from app.models import ProviderCredential, UsageLog, VirtualKey
 from app.pricing import PROVIDERS, estimate_cost, price_for
 from app.simulator import simulate_chat
 
-# in-process per-user Playground rate limiter (best-effort, single instance)
+# in-process per-workspace Playground rate limiter (best-effort, single instance)
 _pg_hits: dict[int, deque[float]] = defaultdict(deque)
 
 
-def enforce_user_quota(db: Session, vk: VirtualKey) -> None:
-    """Per-account caps for signed-up users (admin is exempt)."""
-    if vk.user_id is None:
-        return
-    user = db.get(User, vk.user_id)
-    if user is None or user.is_admin:
-        return
+def enforce_workspace_quota(db: Session, vk: VirtualKey) -> None:
+    """Per-workspace request-rate + stored-row caps. Applies to every workspace."""
+    ws_id = vk.workspace_id
     now = time.time()
-    q = _pg_hits[user.id]
+    q = _pg_hits[ws_id]
     while q and now - q[0] > 3600:
         q.popleft()
     if len(q) >= settings.PLAYGROUND_REQUESTS_PER_HOUR:
@@ -50,17 +46,17 @@ def enforce_user_quota(db: Session, vk: VirtualKey) -> None:
         .select_from(UsageLog)
         .where(
             UsageLog.key_id.in_(
-                select(VirtualKey.id).where(VirtualKey.user_id == user.id)
+                select(VirtualKey.id).where(VirtualKey.workspace_id == ws_id)
             )
         )
     )
-    if (rows or 0) >= settings.MAX_USAGE_ROWS_PER_USER:
+    if (rows or 0) >= settings.MAX_USAGE_ROWS_PER_WORKSPACE:
         raise HTTPException(
             status_code=429,
             detail={
                 "message": (
-                    f"usage cap reached ({settings.MAX_USAGE_ROWS_PER_USER} rows). "
-                    "Clear your data from the Account page."
+                    f"usage cap reached ({settings.MAX_USAGE_ROWS_PER_WORKSPACE} rows). "
+                    "Clear data from the Workspace page."
                 ),
                 "type": "quota_exceeded",
             },
@@ -180,35 +176,32 @@ def enforce_budget(db: Session, vk: VirtualKey) -> None:
         )
 
 
-def _account_provider_key(db: Session, user_id: int, provider: str) -> str | None:
-    """The owning account's own encrypted key for this provider, decrypted."""
+def _workspace_provider_key(db: Session, workspace_id: int, provider: str) -> str | None:
+    """The workspace's own encrypted key for this provider, decrypted."""
     from app.crypto import decrypt
-    from app.models import ProviderCredential
 
     row = db.scalar(
         select(ProviderCredential).where(
-            ProviderCredential.user_id == user_id,
+            ProviderCredential.workspace_id == workspace_id,
             ProviderCredential.provider == provider,
         )
     )
     return decrypt(row.ciphertext) if row else None
 
 
-def any_live_key(db: Session, user_id: int | None, provider_names: list[str]) -> bool:
+def workspace_has_live_provider(
+    db: Session, workspace_id: int, provider_names: list[str]
+) -> bool:
     """True when a real provider key exists for at least one of `provider_names` —
-    a server env var, the admin-global DB key, or (for a signed-in user) one the
-    account has attached. A key with no configured provider would silently fall
-    back to simulated, so callers use this to refuse `allow_live` — admin too."""
+    a server env var, or one the workspace has attached. A key with no configured
+    provider would silently fall back to simulated, so callers use this to refuse
+    `allow_live`."""
     if any(providers.is_configured(p) for p in provider_names):
         return True
-    if user_id is None:
-        return False
-    from app.models import ProviderCredential
-
     attached = set(
         db.scalars(
             select(ProviderCredential.provider).where(
-                ProviderCredential.user_id == user_id
+                ProviderCredential.workspace_id == workspace_id
             )
         )
     )
@@ -217,64 +210,53 @@ def any_live_key(db: Session, user_id: int | None, provider_names: list[str]) ->
 
 def live_key_for(db: Session, vk: VirtualKey, provider: str) -> str | None:
     """The API key a live call for this key + provider would use: a server env var,
-    then the owning account's own key, then the admin-global DB key."""
+    then the workspace's own attached key."""
     envk = settings.provider_api_key(provider)
     if envk:
         return envk
-    if vk.user_id is not None:
-        ak = _account_provider_key(db, vk.user_id, provider)
-        if ak:
-            return ak
-    if settings.ALLOW_DB_PROVIDER_KEYS and providers._db_keys.get(provider):
-        return providers._db_keys[provider]
-    return None
+    return _workspace_provider_key(db, vk.workspace_id, provider)
 
 
-def live_spend_this_month(db: Session, user_id: int, provider: str) -> float:
-    """This account's `mode='live'` cost on one provider since the 1st of the month."""
+def live_spend_this_month(db: Session, workspace_id: int, provider: str) -> float:
+    """A workspace's `mode='live'` cost on one provider since the 1st of the month."""
     val = db.scalar(
         select(func.coalesce(func.sum(UsageLog.cost), 0)).where(
             UsageLog.mode == "live",
             UsageLog.provider == provider,
             UsageLog.ts >= func.date_trunc("month", func.now()),
             UsageLog.key_id.in_(
-                select(VirtualKey.id).where(VirtualKey.user_id == user_id)
+                select(VirtualKey.id).where(VirtualKey.workspace_id == workspace_id)
             ),
         )
     )
     return float(val or 0)
 
 
-def provider_cap(db: Session, user_id: int, provider: str) -> float:
-    """The account's monthly live-spend cap for one provider (its own value, or
+def provider_cap(db: Session, workspace_id: int, provider: str) -> float:
+    """The workspace's monthly live-spend cap for one provider (its own value, or
     the LIVE_CAP_DEFAULT_USD fallback)."""
-    from app.models import ProviderCredential
-
     row = db.scalar(
         select(ProviderCredential.monthly_cap_usd).where(
-            ProviderCredential.user_id == user_id,
+            ProviderCredential.workspace_id == workspace_id,
             ProviderCredential.provider == provider,
         )
     )
     return float(row) if row is not None else float(settings.LIVE_CAP_DEFAULT_USD)
 
 
-def enforce_account_cap(db: Session, vk: VirtualKey, provider: str) -> None:
-    """An account's live spend on a provider can't exceed that provider's monthly cap."""
-    if not vk.allow_live or vk.user_id is None:
+def enforce_workspace_cap(db: Session, vk: VirtualKey, provider: str) -> None:
+    """A workspace's live spend on a provider can't exceed that provider's monthly cap."""
+    if not vk.allow_live:
         return
-    user = db.get(User, vk.user_id)
-    if user is None or user.is_admin:
-        return
-    cap = provider_cap(db, vk.user_id, provider)
-    spent = live_spend_this_month(db, vk.user_id, provider)
+    cap = provider_cap(db, vk.workspace_id, provider)
+    spent = live_spend_this_month(db, vk.workspace_id, provider)
     if spent >= cap:
         raise HTTPException(
             status_code=402,
             detail={
                 "message": (
                     f"{provider} live-spend cap of ${cap:.2f}/month reached "
-                    f"(spent ${spent:.4f}) — raise it on your Account page"
+                    f"(spent ${spent:.4f}) — raise it on the Workspace page"
                 ),
                 "type": "live_cap_exceeded",
                 "code": "402",

@@ -12,6 +12,7 @@ class KeyCreate(BaseModel):
     allowed_providers: list[str] = Field(min_length=1)
     allow_live: bool = False
     default_provider: str | None = None
+    assigned_user_id: int | None = None  # a Team Member of this workspace, or null
     monthly_budget_usd: float | None = Field(default=None, ge=0)
     budget_period: BudgetPeriod = "month"
     budget_start: date | None = None  # required when budget_period == "custom"
@@ -21,6 +22,8 @@ class KeyCreate(BaseModel):
 class KeyUpdate(BaseModel):
     allow_live: bool | None = None
     default_provider: str | None = None
+    assigned_user_id: int | None = None
+    clear_assignment: bool = False
     monthly_budget_usd: float | None = Field(default=None, ge=0)
     budget_period: BudgetPeriod | None = None
     budget_start: date | None = None
@@ -47,7 +50,7 @@ class KeyOut(BaseModel):
     id: int
     label: str
     key_prefix: str
-    owner_username: str | None = None  # only populated for admin
+    assigned_username: str | None = None  # the Team Member it's assigned to (admin view)
     allowed_providers: list[str]
     allow_live: bool
     default_provider: str | None
@@ -68,37 +71,20 @@ class KeyOut(BaseModel):
 class ProviderStatus(BaseModel):
     provider: str
     env_var: str
-    configured: bool
-    valid: bool
-    source: str = "none"  # "env" | "db" | "none"
-    last4: str | None = None  # only when source == "db"
-    checked_at: str | None = None
+    configured_via_env: bool
 
 
-class ProviderKeyIn(BaseModel):
-    api_key: str = Field(min_length=8, max_length=400)
-
-
-# ---- account (per-user live mode) ----
-class AccountProviderStatus(BaseModel):
-    provider: str
-    configured: bool
-    source: str  # "env" | "account" | "none"
-    last4: str | None = None  # only when source == "account"
-    monthly_cap_usd: float | None = None  # None => the account default applies
-    spend_this_month: float = 0.0  # live spend routed through this provider this month
+# ---- account (personal, workspace-agnostic) ----
+class WorkspaceRef(BaseModel):
+    id: int
+    name: str
+    role: str  # "admin" | "member"
 
 
 class AccountOut(BaseModel):
     username: str
-    is_admin: bool
-    can_live: bool  # is_admin or has at least one attached provider key
-    live_cap_default_usd: float  # fallback cap for a provider with no explicit one
-    providers: list[AccountProviderStatus]
-
-
-class ProviderCapIn(BaseModel):
-    monthly_cap_usd: float | None = Field(default=None, ge=0)  # null => clear (use the default)
+    workspace: WorkspaceRef | None
+    live_cap_default_usd: float
 
 
 class KeyInspect(BaseModel):

@@ -35,7 +35,7 @@ function ThemeToggle() {
 }
 
 export function Layout({ children }: { children: ReactNode }) {
-  const { authenticated, isAdmin } = useAuth();
+  const { authenticated, inWorkspace, isWorkspaceAdmin, workspace } = useAuth();
   return (
     <div className="flex min-h-full flex-col">
       <header className="border-b border-line bg-surface">
@@ -43,26 +43,49 @@ export function Layout({ children }: { children: ReactNode }) {
           <div className="flex items-center gap-2">
             <span className="inline-block h-6 w-6 rounded bg-brand-600" />
             <span className="font-semibold text-fg">LLM Usage Tracker</span>
+            {workspace && (
+              <span className="rounded bg-fill px-1.5 py-0.5 text-xs text-fg-muted">
+                {workspace.name}
+              </span>
+            )}
           </div>
           <nav className="ml-auto flex items-center gap-1">
-            {authenticated ? (
+            {!authenticated && (
+              <NavLink to="/login" className={navClass}>
+                Sign in
+              </NavLink>
+            )}
+            {authenticated && !inWorkspace && (
+              <NavLink to="/welcome" className={navClass}>
+                Get started
+              </NavLink>
+            )}
+            {authenticated && inWorkspace && (
               <>
                 <NavLink to="/dashboard" className={navClass}>
                   Dashboard
                 </NavLink>
-                <NavLink to="/requests" className={navClass}>
-                  Requests
-                </NavLink>
-                <NavLink to="/playground" className={navClass}>
-                  Playground
-                </NavLink>
+                {isWorkspaceAdmin && (
+                  <>
+                    <NavLink to="/requests" className={navClass}>
+                      Requests
+                    </NavLink>
+                    <NavLink to="/playground" className={navClass}>
+                      Playground
+                    </NavLink>
+                    <NavLink to="/workspace" className={navClass}>
+                      Workspace
+                    </NavLink>
+                  </>
+                )}
                 <NavLink to="/account" className={navClass}>
-                  {isAdmin ? "Admin" : "Account"}
+                  Account
                 </NavLink>
               </>
-            ) : (
-              <NavLink to="/login" className={navClass}>
-                Sign in
+            )}
+            {authenticated && !inWorkspace && (
+              <NavLink to="/account" className={navClass}>
+                Account
               </NavLink>
             )}
             <ThemeToggle />

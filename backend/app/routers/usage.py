@@ -78,12 +78,19 @@ def usage_summary(
             model,
             key_id,
         ),
-        v.user_id,
+        v,
     )
     row = db.execute(stmt).one()
-    ak_stmt = select(func.count()).select_from(VirtualKey).where(VirtualKey.revoked_at.is_(None))
-    if v.user_id is not None:
-        ak_stmt = ak_stmt.where(VirtualKey.user_id == v.user_id)
+    ak_stmt = (
+        select(func.count())
+        .select_from(VirtualKey)
+        .where(
+            VirtualKey.revoked_at.is_(None),
+            VirtualKey.workspace_id == v.workspace_id,
+        )
+    )
+    if not v.is_admin:
+        ak_stmt = ak_stmt.where(VirtualKey.assigned_user_id == v.user_id)
     active_keys = db.scalar(ak_stmt)
     total_requests = row[0]
     errors = int(row[9])
@@ -132,7 +139,7 @@ def usage_timeseries(
             model,
             key_id,
         ),
-        v.user_id,
+        v,
     ).group_by(day, UsageLog.provider).order_by(day)
     return [
         {
@@ -175,7 +182,7 @@ def usage_by_key(
             model,
             key_id,
         ),
-        v.user_id,
+        v,
     ).join(VirtualKey, VirtualKey.id == UsageLog.key_id).group_by(
         UsageLog.key_id, VirtualKey.label, VirtualKey.key_prefix
     ).order_by(func.coalesce(func.sum(UsageLog.cost), 0).desc())
@@ -220,7 +227,7 @@ def usage_by_model(
             model,
             key_id,
         ),
-        v.user_id,
+        v,
     ).group_by(UsageLog.provider, UsageLog.model).order_by(
         func.coalesce(func.sum(UsageLog.total_tokens), 0).desc()
     )

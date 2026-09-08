@@ -24,9 +24,9 @@ from app.config import settings
 from app.db import get_db
 from app.gateway import (
     CompletionResult,
-    enforce_account_cap,
     enforce_budget,
-    enforce_user_quota,
+    enforce_workspace_cap,
+    enforce_workspace_quota,
     live_key_for,
     record_usage,
     record_usage_detached,
@@ -78,9 +78,9 @@ def chat_completions(
     prompt = _prompt_from_messages(body.messages)
     if not prompt:
         raise HTTPException(422, "messages must contain user text content")
-    enforce_user_quota(db, vk)
+    enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
-    enforce_account_cap(db, vk, provider)
+    enforce_workspace_cap(db, vk, provider)
     live_key = live_key_for(db, vk, provider)
 
     cid = f"chatcmpl-{uuid4().hex}"

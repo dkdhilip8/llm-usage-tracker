@@ -1,6 +1,5 @@
-"""Multi-tenant auth: signup + login (users and the admin account), session
-cookie, logout, and `/me`. Username + password — no email, no password reset
-yet. The X-Admin-Token header is a parallel admin credential."""
+"""Auth: signup + login, session cookie, logout, and `/me`. Username + password —
+no email, no password reset yet."""
 
 import time
 from collections import defaultdict, deque
@@ -12,9 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.config import settings
 from app.db import get_db
-from app.gateway import any_live_key
-from app.models import User
-from app.providers import SUPPORTED
+from app.models import User, Workspace
 from app.security import (
     SESSION_COOKIE,
     current_user,
@@ -57,14 +54,21 @@ def _set_cookie(resp: Response, user_id: int) -> None:
 def _me(db: Session, user: User | None) -> dict:
     if user is None:
         return {"authenticated": False, "user": None}
+    workspace = None
+    if user.workspace_id is not None:
+        ws = db.get(Workspace, user.workspace_id)
+        if ws is not None:
+            workspace = {
+                "id": ws.id,
+                "name": ws.name,
+                "role": user.workspace_role or "member",
+            }
     return {
         "authenticated": True,
         "user": {
             "id": user.id,
             "username": user.username,
-            "is_admin": user.is_admin,
-            # any provider (env / admin-global / attached) has a real key behind it
-            "can_live": any_live_key(db, user.id, list(SUPPORTED)),
+            "workspace": workspace,
         },
     }
 
@@ -86,9 +90,7 @@ def signup(body: Credentials, request: Request, resp: Response, db: Session = De
     username = body.username.strip().lower()
     _throttle_signup(request.client.host if request.client else "?")
 
-    account_count = db.scalar(
-        select(func.count()).select_from(User).where(User.is_admin.is_(False))
-    )
+    account_count = db.scalar(select(func.count()).select_from(User))
     if (account_count or 0) >= settings.MAX_USERS:
         raise HTTPException(503, "sign-ups are currently closed — try again later")
     if db.scalar(select(User.id).where(func.lower(User.username) == username)):

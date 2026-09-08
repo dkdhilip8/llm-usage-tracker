@@ -1,37 +1,37 @@
-"""Who-can-see-what for the read endpoints. Sign-in is required.
+"""Who-can-see-what for the read endpoints. Sign-in AND workspace membership are
+required.
 
-Signed in -> only your own keys + usage.
-Admin     -> everything (`user_id` is None).
+Workspace Admin -> every key + usage row in their workspace.
+Team Member     -> only the virtual key(s) assigned to them, and their usage.
+
+`scope_usage` is the single tenancy chokepoint for /api/usage/* and /api/requests.
 """
 
-from dataclasses import dataclass
-
-from fastapi import Depends, HTTPException
+from fastapi import Depends
 from sqlalchemy import Select, select
 
-from app.models import UsageLog, User, VirtualKey
-from app.security import current_user
+from app.models import UsageLog, VirtualKey
+from app.workspace import Membership, require_membership
+
+# `Viewer` is just the membership under a name the read routers already use.
+Viewer = Membership
 
 
-@dataclass
-class Viewer:
-    user_id: int | None  # scope to this owner; None = all (admin)
-    is_admin: bool
+def viewer(m: Membership = Depends(require_membership)) -> Viewer:
+    return m
 
 
-def viewer(user: User | None = Depends(current_user)) -> Viewer:
-    if user is None:
-        raise HTTPException(status_code=401, detail="sign in required")
-    if user.is_admin:
-        return Viewer(None, True)
-    return Viewer(user.id, False)
+def scope_usage(stmt: Select, v: Viewer) -> Select:
+    """Restrict a usage_logs query to what `v` may see."""
+    keys = select(VirtualKey.id).where(VirtualKey.workspace_id == v.workspace_id)
+    if not v.is_admin:
+        keys = keys.where(VirtualKey.assigned_user_id == v.user_id)
+    return stmt.where(UsageLog.key_id.in_(keys))
 
 
-def scope_usage(stmt: Select, user_id: int | None) -> Select:
-    if user_id is None:
-        return stmt
-    return stmt.where(
-        UsageLog.key_id.in_(
-            select(VirtualKey.id).where(VirtualKey.user_id == user_id)
-        )
-    )
+def scope_keys(stmt: Select, v: Viewer) -> Select:
+    """Restrict a virtual_keys query to what `v` may see."""
+    stmt = stmt.where(VirtualKey.workspace_id == v.workspace_id)
+    if not v.is_admin:
+        stmt = stmt.where(VirtualKey.assigned_user_id == v.user_id)
+    return stmt

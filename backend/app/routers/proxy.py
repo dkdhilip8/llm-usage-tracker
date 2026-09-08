@@ -6,9 +6,9 @@ from app.config import settings
 from app.db import get_db
 from app.gateway import (
     authorize_provider,
-    enforce_account_cap,
     enforce_budget,
-    enforce_user_quota,
+    enforce_workspace_cap,
+    enforce_workspace_quota,
     record_usage,
     run_completion,
 )
@@ -59,9 +59,9 @@ def proxy_chat(
     prompt = _extract_prompt(body)
     if not prompt:
         raise HTTPException(422, "prompt or messages is required")
-    enforce_user_quota(db, vk)
+    enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
-    enforce_account_cap(db, vk, body.provider)
+    enforce_workspace_cap(db, vk, body.provider)
 
     result = run_completion(db, vk, body.provider, body.model, prompt)
     row = record_usage(db, vk, body.provider, body.model, prompt, result)

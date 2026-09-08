@@ -23,10 +23,17 @@ def test_read_endpoints_require_sign_in(client):
     assert client.get("/api/requests").status_code == 401
 
 
-def test_key_create_list_hides_secret(client, admin, make_key):
+def test_signed_in_without_workspace_is_403(signup):
+    c, _ = signup()
+    assert c.get("/api/usage/summary").status_code == 403
+    assert c.get("/api/keys").status_code == 403
+    assert c.get("/api/requests").status_code == 403
+
+
+def test_key_create_list_hides_secret(admin_client, make_key):
     k = make_key(label="alice", allowed_providers=["openrouter", "openai"])
     assert k["key"].startswith("vk_")
-    rows = client.get("/api/keys", headers=admin).json()
+    rows = admin_client.get("/api/keys").json()
     assert rows and "key_hash" not in rows[0] and "key" not in rows[0]
     assert rows[0]["spend_period"] == 0
     assert rows[0]["budget_period"] == "month"
@@ -74,9 +81,9 @@ def test_budget_402(client, make_key):
     assert r.json()["detail"]["type"] == "budget_exceeded"
 
 
-def test_budget_patch_clears(client, admin, make_key):
+def test_budget_patch_clears(client, admin_client, make_key):
     k = make_key(monthly_budget_usd=0)
-    client.patch(f"/api/keys/{k['id']}", json={"clear_budget": True}, headers=admin)
+    admin_client.patch(f"/api/keys/{k['id']}", json={"clear_budget": True})
     r = client.post(
         "/v1/proxy/chat",
         json={"provider": "openrouter", "model": OR_MODEL, "prompt": "hi"},
@@ -119,18 +126,18 @@ def test_openai_compat_stream_terminates(client, make_key):
     assert '"object": "chat.completion.chunk"' in body
 
 
-def test_requests_log_and_metrics(client, admin, make_key):
+def test_requests_log_and_metrics(client, admin_client, make_key):
     k = make_key(allowed_providers=["openrouter"])
     client.post(
         "/v1/proxy/chat",
         json={"provider": "openrouter", "model": OR_MODEL, "prompt": "log me"},
         headers=_bearer(k["key"]),
     )
-    items = client.get("/api/requests?limit=10", headers=admin).json()["items"]
+    items = admin_client.get("/api/requests?limit=10").json()["items"]
     assert items and items[0]["provider"] == "openrouter"
     assert items[0]["prompt_preview"] == "log me"  # LOG_BODIES=true in tests
 
-    j = client.get("/api/usage/summary", headers=admin).json()
+    j = admin_client.get("/api/usage/summary").json()
     for key in (
         "latency_p50_ms",
         "latency_p95_ms",
@@ -150,9 +157,9 @@ def test_simulator_deterministic():
     assert a == b
 
 
-def test_revoked_key_rejected(client, admin, make_key):
+def test_revoked_key_rejected(client, admin_client, make_key):
     k = make_key(allowed_providers=["openrouter"])
-    client.delete(f"/api/keys/{k['id']}", headers=admin)
+    admin_client.delete(f"/api/keys/{k['id']}")
     r = client.post(
         "/v1/proxy/chat",
         json={"provider": "openrouter", "model": OR_MODEL, "prompt": "hi"},
@@ -169,22 +176,21 @@ def _chat(client, key: str, model: str = OR_MODEL):
     )
 
 
-def test_budget_period_stored_and_used(client, admin, make_key):
+def test_budget_period_stored_and_used(client, admin_client, make_key):
     k = make_key(
         allowed_providers=["openrouter"], monthly_budget_usd=0, budget_period="day"
     )
     r = _chat(client, k["key"])
     assert r.status_code == 402
     assert "per day" in r.json()["detail"]["message"]
-    rows = client.get("/api/keys", headers=admin).json()
+    rows = admin_client.get("/api/keys").json()
     assert rows[0]["budget_period"] == "day"
 
 
-def test_custom_budget_window(client, admin, make_key):
+def test_custom_budget_window(client, admin_client, make_key):
     import datetime as _dt
 
     today = _dt.date.today()
-    # window that is active now -> 0 budget blocks
     k = make_key(
         allowed_providers=["openrouter"],
         monthly_budget_usd=0,
@@ -195,11 +201,10 @@ def test_custom_budget_window(client, admin, make_key):
     r = _chat(client, k["key"])
     assert r.status_code == 402
     assert "for " in r.json()["detail"]["message"]
-    rows = client.get("/api/keys", headers=admin).json()
+    rows = admin_client.get("/api/keys").json()
     assert rows[0]["budget_period"] == "custom"
     assert rows[0]["budget_start"] and rows[0]["budget_end"]
 
-    # window entirely in the past -> cap no longer applies
     k2 = make_key(
         allowed_providers=["openrouter"],
         monthly_budget_usd=0,
@@ -210,14 +215,13 @@ def test_custom_budget_window(client, admin, make_key):
     assert _chat(client, k2["key"]).status_code == 200
 
 
-def test_custom_budget_requires_dates(client, admin):
-    r = client.post(
+def test_custom_budget_requires_dates(admin_client):
+    r = admin_client.post(
         "/api/keys",
         json={
             "label": "bad",
             "allowed_providers": ["openrouter"],
             "budget_period": "custom",
         },
-        headers=admin,
     )
     assert r.status_code == 422

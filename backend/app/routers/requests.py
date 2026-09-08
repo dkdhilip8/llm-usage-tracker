@@ -1,5 +1,5 @@
-"""Request log — recent `usage_logs` rows for the Requests tab, scoped to the
-viewer (your own when signed in, all for admin; sign-in required).
+"""Request log — recent `usage_logs` rows for the Requests tab. Workspace Admin
+only (a Team Member's view is the Dashboard, scoped to their assigned keys).
 
 Prompt/response previews are only populated when LOG_BODIES=true (off by default)."""
 
@@ -12,7 +12,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.models import UsageLog, VirtualKey
-from app.scoping import Viewer, scope_usage, viewer
+from app.scoping import Viewer, scope_usage
+from app.workspace import require_workspace_admin
 
 router = APIRouter(prefix="/api", tags=["requests"])
 
@@ -29,7 +30,7 @@ def list_requests(
     start: datetime | None = None,
     end: datetime | None = None,
     db: Session = Depends(get_db),
-    v: Viewer = Depends(viewer),
+    v: Viewer = Depends(require_workspace_admin),
 ) -> dict:
     limit = max(1, min(limit, 200))
     stmt: Select = scope_usage(
@@ -37,7 +38,7 @@ def list_requests(
         .join(VirtualKey, VirtualKey.id == UsageLog.key_id)
         .order_by(UsageLog.id.desc())
         .limit(limit + 1),
-        v.user_id,
+        v,
     )
     if cursor is not None:
         stmt = stmt.where(UsageLog.id < cursor)

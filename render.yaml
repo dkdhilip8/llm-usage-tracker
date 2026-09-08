@@ -10,24 +10,22 @@ services:
     autoDeploy: true
     envVars:
       # Marks this as a deployed environment: the app refuses to start on the
-      # built-in dev ADMIN_TOKEN / SECRET_KEY (both generated below).
+      # built-in dev SECRET_KEY (generated below).
       - key: ENVIRONMENT
         value: production
       - key: DATABASE_URL
         sync: false
-      - key: ADMIN_TOKEN
-        generateValue: true
+      # Signs the session cookie + peppers virtual-key hashes.
       - key: SECRET_KEY
         generateValue: true
-      # Admin login front door. Required in a deployed ENVIRONMENT.
-      - key: ADMIN_USERNAME
-        value: admin
-      - key: ADMIN_PASSWORD
+      # Encrypts each workspace's stored provider keys (Fernet). Set explicitly so
+      # rotating SECRET_KEY does not orphan them.
+      - key: ENCRYPTION_KEY
         generateValue: true
-      # Live upstream calls are enabled — but only for a virtual key whose owner
-      # has attached their own provider API key on the Account page, and only up
-      # to that provider's monthly cap. No server-side provider key is set below,
-      # so nothing is billed until someone attaches one.
+      # Live upstream calls are enabled — but only for a virtual key whose
+      # workspace has attached its own provider API key, and only up to that
+      # provider's monthly cap. No server-side provider key is set below, so
+      # nothing is billed until a workspace attaches one.
       - key: ENABLE_LIVE
         value: "true"
       # Don't store prompt/response bodies by default.
