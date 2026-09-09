@@ -27,8 +27,6 @@ export function KeyUsageTable({ rows }: { rows: ByKeyRow[] }) {
               <th className="py-2 pr-4">User / Label</th>
               <th className="py-2 pr-4">Key prefix</th>
               <th className="py-2 pr-4 text-right">{header("requests", "Requests")}</th>
-              <th className="py-2 pr-4 text-right">Prompt</th>
-              <th className="py-2 pr-4 text-right">Completion</th>
               <th className="py-2 pr-4 text-right">{header("total_tokens", "Total tokens")}</th>
               <th className="py-2 pr-4 text-right">{header("cost", "Cost")}</th>
               <th className="py-2 pr-0 text-right">Last used</th>
@@ -37,7 +35,7 @@ export function KeyUsageTable({ rows }: { rows: ByKeyRow[] }) {
           <tbody>
             {sorted.length === 0 && (
               <tr>
-                <td colSpan={8} className="py-8 text-center text-fg-subtle">
+                <td colSpan={6} className="py-8 text-center text-fg-subtle">
                   No usage in this range yet
                 </td>
               </tr>
@@ -49,12 +47,6 @@ export function KeyUsageTable({ rows }: { rows: ByKeyRow[] }) {
                   {r.key_prefix}…
                 </td>
                 <td className="py-2 pr-4 text-right tabular-nums">{num(r.requests)}</td>
-                <td className="py-2 pr-4 text-right tabular-nums text-fg-muted">
-                  {num(r.prompt_tokens)}
-                </td>
-                <td className="py-2 pr-4 text-right tabular-nums text-fg-muted">
-                  {num(r.completion_tokens)}
-                </td>
                 <td className="py-2 pr-4 text-right tabular-nums">{tokens(r.total_tokens)}</td>
                 <td className="py-2 pr-4 text-right tabular-nums font-medium">
                   {usd(r.cost)}
