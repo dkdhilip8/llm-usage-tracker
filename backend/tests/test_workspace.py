@@ -93,18 +93,32 @@ def test_member_dashboard_is_scoped_to_assigned_keys(admin_client, new_member):
         "/api/keys",
         json={"label": "hers", "allowed_providers": ["openrouter"], "assigned_user_id": uid},
     ).json()
-    admin_client.post("/api/keys", json={"label": "shared", "allowed_providers": ["openrouter"]})
+    shared = admin_client.post(
+        "/api/keys", json={"label": "shared", "allowed_providers": ["openrouter"]}
+    ).json()
 
     rows = mc.get("/api/keys").json()
     assert [k["label"] for k in rows] == ["hers"]
 
-    # traffic on the assigned key shows for the member; the shared key's doesn't
-    admin_client.post(
-        "/v1/proxy/chat",
-        json={"provider": "openrouter", "model": "m", "prompt": "hi"},
-        headers={"Authorization": f"Bearer {assigned['key']}"},
-    )
+    # one usage row on each key — the member only sees the one on their key
+    import datetime as _dt
+
+    from app.db import SessionLocal
+    from app.models import UsageLog
+
+    with SessionLocal() as db:
+        for i, kid in enumerate((assigned["id"], shared["id"])):
+            db.add(
+                UsageLog(
+                    key_id=kid, request_id=f"r{i}", provider="openrouter", model="m",
+                    prompt_tokens=1, completion_tokens=1, total_tokens=2, cost=0,
+                    latency_ms=1, status="success", ts=_dt.datetime.now(_dt.UTC),
+                )
+            )
+        db.commit()
+
     assert mc.get("/api/usage/summary").json()["total_requests"] == 1
+    assert admin_client.get("/api/usage/summary").json()["total_requests"] == 2
 
 
 def test_remove_member_revokes_access_and_unassigns_keys(admin_client, new_member):

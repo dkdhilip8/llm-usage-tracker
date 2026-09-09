@@ -63,11 +63,6 @@ class Settings(BaseSettings):
     OPENROUTER_API_KEY: str = ""
     GEMINI_API_KEY: str = ""  # Google AI Studio key; used via the OpenAI-compatible endpoint
 
-    # Master switch for real upstream calls. Off => every request runs in dry-run
-    # (simulated) mode. Even when on, a request also needs key.allow_live + a
-    # configured & valid provider.
-    ENABLE_LIVE: bool = False
-
     # Seconds to cache a provider liveness check.
     PROVIDER_CHECK_TTL: int = 300
 
@@ -75,11 +70,7 @@ class Settings(BaseSettings):
     # Off by default — request bodies can contain sensitive data.
     LOG_BODIES: bool = False
 
-    # In dry-run mode, sleep for the simulated latency so the Playground feels
-    # real. Tests set this false for speed.
-    SIMULATE_LATENCY_SLEEP: bool = True
-
-    VERSION: str = "0.10.0"
+    VERSION: str = "0.11.0"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":

@@ -8,6 +8,10 @@ Lets any OpenAI SDK point at this gateway:
         model="openrouter/meta-llama/llama-3.3-70b-instruct",
         messages=[{"role": "user", "content": "hi"}],
     )
+
+Every request hits a real provider — there is no simulator. A key with no
+configured provider (402), a paused key (403), or an upstream failure (502)
+returns an error.
 """
 
 import json
@@ -20,16 +24,15 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app import providers
-from app.config import settings
 from app.db import get_db
 from app.gateway import (
     CompletionResult,
     enforce_budget,
     enforce_workspace_cap,
     enforce_workspace_quota,
-    live_key_for,
     record_usage,
     record_usage_detached,
+    require_live_ready,
     resolve_target,
     run_completion,
 )
@@ -37,9 +40,10 @@ from app.models import VirtualKey
 from app.pricing import estimate_cost
 from app.schemas import OpenAIChatRequest
 from app.security import require_virtual_key
-from app.simulator import simulate_chat
 
 router = APIRouter(prefix="/v1", tags=["openai-compatible"])
+
+_SSE_PROVIDERS = ("openai", "openrouter", "gemini")
 
 
 def _prompt_from_messages(messages: list[dict]) -> str:
@@ -81,7 +85,7 @@ def chat_completions(
     enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
     enforce_workspace_cap(db, vk, provider)
-    live_key = live_key_for(db, vk, provider)
+    live_key = require_live_ready(db, vk, provider)  # 403 paused / 402 no key
 
     cid = f"chatcmpl-{uuid4().hex}"
     created = int(time.time())
@@ -107,12 +111,13 @@ def chat_completions(
                 "total_tokens": result.total_tokens,
             },
             "x_gateway": {
-                "mode": result.mode,
                 "cost": result.cost,
                 "cost_source": result.cost_source,
                 "latency_ms": result.latency_ms,
             },
         }
+
+    vk_id = vk.id
 
     def event_stream() -> Iterator[str]:
         t0 = time.perf_counter()
@@ -120,17 +125,10 @@ def chat_completions(
         pt = ct = 0
         cost: float | None = None
         cost_source = "configured"
-        mode = "simulated"
-        streamed_live = False
+        status = "success"
 
-        go_live = (
-            settings.ENABLE_LIVE
-            and vk.allow_live
-            and live_key is not None
-            and provider in ("openai", "openrouter", "gemini")
-        )
-        if go_live:
-            try:
+        try:
+            if provider in _SSE_PROVIDERS:
                 first = True
                 for kind, payload in providers.stream_openai_compatible(
                     provider, model, prompt, api_key=live_key
@@ -157,27 +155,28 @@ def chat_completions(
                                 estimate_cost(provider, model, pt, ct),
                                 "configured",
                             )
-                mode, streamed_live = "live", True
-            except Exception as exc:  # noqa: BLE001 — fall back to simulated
-                note = f"[live stream failed, simulated instead: {exc}] "
-                acc.append(note)
-                yield _chunk(cid, created, body.model, {"role": "assistant", "content": note})
-
-        if not streamed_live:
-            text, spt, sct, _lat = simulate_chat(provider, model, prompt)
-            pt, ct = spt, sct
-            cost, cost_source, mode = (
-                estimate_cost(provider, model, pt, ct),
-                "configured",
-                "simulated",
-            )
-            first = not acc
-            for word in text.split(" "):
-                token = word if first else " " + word
-                first = False
-                acc.append(token)
-                yield _chunk(cid, created, body.model, {"content": token})
-                time.sleep(0.03)
+            else:  # anthropic — no SSE passthrough; single-shot, then chunk it out
+                text, pt, ct, actual = providers.call_provider(
+                    provider, model, prompt, api_key=live_key
+                )
+                if actual is not None:
+                    cost, cost_source = round(float(actual), 6), "provider"
+                else:
+                    cost, cost_source = estimate_cost(provider, model, pt, ct), "configured"
+                for i, word in enumerate(text.split(" ")):
+                    token = word if i == 0 else " " + word
+                    acc.append(token)
+                    delta = (
+                        {"role": "assistant", "content": token}
+                        if i == 0
+                        else {"content": token}
+                    )
+                    yield _chunk(cid, created, body.model, delta)
+        except Exception as exc:  # noqa: BLE001
+            status = "error"
+            note = f"[{provider} call failed: {exc}]"
+            acc.append(note)
+            yield _chunk(cid, created, body.model, {"role": "assistant", "content": note})
 
         latency_ms = int((time.perf_counter() - t0) * 1000)
         final = {
@@ -196,9 +195,11 @@ def chat_completions(
         yield "data: [DONE]\n\n"
 
         result = CompletionResult(
-            "".join(acc), pt, ct, cost or 0.0, cost_source, mode, latency_ms
+            "".join(acc), pt, ct, cost or 0.0, cost_source, latency_ms
         )
-        record_usage_detached(vk.id, provider, model, prompt, result, request_id=cid)
+        record_usage_detached(
+            vk_id, provider, model, prompt, result, request_id=cid, status=status
+        )
 
     return StreamingResponse(
         event_stream(),

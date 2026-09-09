@@ -22,12 +22,11 @@ services:
       # rotating SECRET_KEY does not orphan them.
       - key: ENCRYPTION_KEY
         generateValue: true
-      # Live upstream calls are enabled — but only for a virtual key whose
-      # workspace has attached its own provider API key, and only up to that
-      # provider's monthly cap. No server-side provider key is set below, so
-      # nothing is billed until a workspace attaches one.
-      - key: ENABLE_LIVE
-        value: "true"
+      # Every proxied request calls the real provider. A virtual key whose
+      # workspace has no key for its provider (or that is paused) returns an
+      # error — there is no simulator. No server-side provider key is set below,
+      # so nothing is billed until a workspace attaches one.
+      #
       # Don't store prompt/response bodies by default.
       - key: LOG_BODIES
         value: "false"

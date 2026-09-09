@@ -96,7 +96,8 @@ class VirtualKey(Base):
     key_hash: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     # "vk_" + first 8 chars of the raw key — display only.
     key_prefix: Mapped[str] = mapped_column(String, nullable=False)
-    # If true (and ENABLE_LIVE + provider configured & valid), requests hit real providers.
+    # On/off spend gate. False => requests with this key return 403 "key paused".
+    # True => requests hit the real provider (402 if the workspace has no key for it).
     allow_live: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     # Provider used when an OpenAI-compatible request sends a bare model name (no "provider/" prefix).
     default_provider: Mapped[str | None] = mapped_column(String)
@@ -183,11 +184,11 @@ class UsageLog(Base):
     # charged (OpenRouter's usage.cost); when "configured" it's tokens x price table.
     cost: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
     cost_source: Mapped[str] = mapped_column(String, nullable=False, default="configured")
-    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    # Legacy columns from the retired simulator — always written "live" / False now.
+    simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     latency_ms: Mapped[int] = mapped_column(Integer, nullable=False)
     status: Mapped[str] = mapped_column(String, nullable=False, default="success")
-    # Mode of this request: "simulated" | "live". (simulated bool kept for back-compat.)
-    mode: Mapped[str] = mapped_column(String, nullable=False, default="simulated")
+    mode: Mapped[str] = mapped_column(String, nullable=False, default="live")
     # Truncated request/response text — populated only when LOG_BODIES=true.
     prompt_preview: Mapped[str | None] = mapped_column(Text)
     response_preview: Mapped[str | None] = mapped_column(Text)

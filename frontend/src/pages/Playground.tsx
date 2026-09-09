@@ -1,10 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import {
-  api,
-  type ChatResult,
-  type KeyInspect,
-  type ModelInfo,
-} from "../lib/api";
+import { api, type ChatResult, type KeyInspect, type ModelInfo } from "../lib/api";
 import { Card } from "../components/Card";
 import { usd } from "../lib/format";
 
@@ -23,11 +18,8 @@ export function Playground() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [liveEnabled, setLiveEnabled] = useState(false);
-
   useEffect(() => {
     api.models().then(setModels).catch(() => setModels([]));
-    api.health().then((h) => setLiveEnabled(h.live_enabled)).catch(() => {});
   }, []);
 
   // look up the key's allowed providers whenever it changes (debounced)
@@ -70,18 +62,13 @@ export function Playground() {
   }, [providerModels, model]);
 
   const currentProvider = inspect?.providers.find((p) => p.provider === provider);
-  const currentMode = currentProvider?.mode;
 
-  // explain why a request would run simulated even though it might be expected live
-  let simReason = "";
-  if (currentProvider && currentMode === "simulated") {
-    if (!liveEnabled) simReason = "server has ENABLE_LIVE off";
-    else if (!inspect?.allow_live)
-      simReason = 'this key is not "allow live" — toggle it on the Workspace page';
-    else if (!currentProvider.configured)
-      simReason = `${provider} has no server API key configured`;
-    else if (!currentProvider.valid)
-      simReason = `${provider} key failed its liveness check`;
+  let blockReason = "";
+  if (inspect && currentProvider) {
+    if (!inspect.allow_live)
+      blockReason = 'this key is paused — turn on "allow live" for it on the Workspace page';
+    else if (!currentProvider.ready)
+      blockReason = `no ${provider} API key is configured for this workspace`;
   }
 
   async function send() {
@@ -97,7 +84,9 @@ export function Playground() {
     }
   }
 
-  const ready = Boolean(key.trim() && inspect && provider && model && prompt.trim());
+  const ready = Boolean(
+    key.trim() && inspect && provider && model && prompt.trim() && !blockReason,
+  );
 
   return (
     <div className="grid gap-4 lg:grid-cols-[380px_1fr]">
@@ -117,7 +106,7 @@ export function Playground() {
             <div className="rounded-md bg-surface-2 px-2 py-1.5 text-[11px] text-fg-muted">
               {inspect.label} · {inspect.providers.length} provider
               {inspect.providers.length === 1 ? "" : "s"} allowed
-              {inspect.allow_live ? " · live-allowed" : ""}
+              {inspect.allow_live ? "" : " · paused"}
             </div>
           )}
 
@@ -133,7 +122,8 @@ export function Playground() {
                 {!inspect && <option value="">enter a key first</option>}
                 {inspect?.providers.map((p) => (
                   <option key={p.provider} value={p.provider}>
-                    {p.provider} · {p.mode}
+                    {p.provider}
+                    {p.ready ? "" : " · no key"}
                   </option>
                 ))}
               </select>
@@ -167,23 +157,18 @@ export function Playground() {
             disabled={busy || !ready}
             className="w-full rounded-md bg-brand-600 px-3 py-2 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
           >
-            {busy ? "Sending…" : `Send (${currentMode ?? "…"})`}
+            {busy ? "Sending…" : "Send"}
           </button>
 
           {error && <div className="text-xs text-red-600 dark:text-red-400">{error}</div>}
-          {simReason && (
+          {blockReason && (
             <div className="rounded-md border border-amber-200 bg-amber-50 px-2 py-1.5 text-[11px] text-amber-800 dark:text-amber-300">
-              Runs <strong>simulated</strong>: {simReason}.
-            </div>
-          )}
-          {currentMode === "live" && (
-            <div className="rounded-md border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50 dark:bg-emerald-500/10 px-2 py-1.5 text-[11px] text-emerald-800 dark:text-emerald-300">
-              Runs <strong>live</strong> — this calls {provider} for real and costs money.
+              Can't send: {blockReason}.
             </div>
           )}
           <p className="text-[11px] text-fg-subtle">
-            Requests are attributed to the key. Simulated cost is estimated from the configured
-            price table; live OpenRouter cost is the provider's actual charge.
+            Every request calls the real provider and costs money. OpenRouter cost is the
+            provider's actual charge; the others are estimated from the price table.
           </p>
         </div>
       </Card>
@@ -196,16 +181,7 @@ export function Playground() {
         )}
         {results.map((r) => (
           <Card key={r.request_id}>
-            <div className="mb-2 flex items-center justify-between">
-              <span
-                className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
-                  r.mode === "live"
-                    ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                    : "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                }`}
-              >
-                {r.mode === "live" ? "Live Request" : "Simulated Request"}
-              </span>
+            <div className="mb-2 flex items-center justify-end">
               <span className="font-mono text-xs text-fg-subtle">
                 {r.provider}/{r.model} · {r.latency_ms} ms
               </span>
@@ -218,9 +194,7 @@ export function Playground() {
               </div>
               <div>
                 <div className="text-fg-subtle">Completion</div>
-                <div className="font-semibold tabular-nums">
-                  {r.usage.completion_tokens}
-                </div>
+                <div className="font-semibold tabular-nums">{r.usage.completion_tokens}</div>
               </div>
               <div>
                 <div className="text-fg-subtle">Total</div>

@@ -90,7 +90,7 @@ class AccountOut(BaseModel):
 class KeyInspect(BaseModel):
     label: str
     allow_live: bool
-    providers: list[dict]  # {provider, configured, valid, mode}
+    providers: list[dict]  # {provider, ready}  ready = a workspace key exists for it
 
 
 # ---- proxy ----
@@ -124,8 +124,6 @@ class ChatResponse(BaseModel):
     request_id: str
     provider: str
     model: str
-    mode: str  # "simulated" | "live"
-    simulated: bool
     response: str
     usage: Usage
     cost: float

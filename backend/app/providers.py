@@ -1,9 +1,9 @@
 """Provider credentials, liveness checks (cached), and real upstream calls.
 
 A server env var configures a provider instance-wide (usable by every workspace);
-a workspace can also attach its own key (resolved in gateway.live_key_for). Live
-calls are dormant unless ENABLE_LIVE is set AND the calling virtual key has
-allow_live AND the provider is configured & reachable."""
+a workspace can also attach its own key (resolved in gateway.live_key_for). Every
+proxied request makes a real call — a virtual key with allow_live off, or with no
+configured provider key, gets an error, not a simulated response."""
 
 import json
 import time
@@ -135,11 +135,7 @@ def warm_cache() -> None:
                 pass
 
 
-def live_available(provider: str) -> bool:
-    return settings.ENABLE_LIVE and is_configured(provider) and check_liveness(provider)
-
-
-# ---- real upstream calls (only reached when live gate passes) ----
+# ---- real upstream calls ----
 def call_provider(
     provider: str, model: str, prompt: str, api_key: str | None = None
 ) -> tuple[str, int, int, float | None]:
@@ -205,7 +201,7 @@ def stream_openai_compatible(
 
     Yields ("delta", text) for each content delta, then a final
     ("done", {"prompt_tokens", "completion_tokens", "cost"}). Raises on transport
-    or HTTP error (caller falls back to simulated)."""
+    or HTTP error (the caller surfaces it as a 502)."""
     headers = _auth_headers(provider, api_key)
     body: dict = {
         "model": model,

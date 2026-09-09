@@ -1,14 +1,13 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
-from app import providers
-from app.config import settings
 from app.db import get_db
 from app.gateway import (
     authorize_provider,
     enforce_budget,
     enforce_workspace_cap,
     enforce_workspace_quota,
+    live_key_for,
     record_usage,
     run_completion,
 )
@@ -28,24 +27,15 @@ def _extract_prompt(body: ChatRequest) -> str:
 
 
 @router.get("/inspect", response_model=KeyInspect)
-def inspect(vk: VirtualKey = Depends(require_virtual_key)) -> KeyInspect:
-    """Authed by the virtual key itself (no admin token). Lets the Playground show
-    only this key's allowed providers and what each would actually do."""
-    rows = []
-    for provider in vk.provider_names():
-        configured = providers.is_configured(provider)
-        valid = providers.check_liveness(provider) if configured else False
-        would_be_live = (
-            settings.ENABLE_LIVE and vk.allow_live and configured and valid
-        )
-        rows.append(
-            {
-                "provider": provider,
-                "configured": configured,
-                "valid": valid,
-                "mode": "live" if would_be_live else "simulated",
-            }
-        )
+def inspect(
+    vk: VirtualKey = Depends(require_virtual_key), db: Session = Depends(get_db)
+) -> KeyInspect:
+    """Authed by the virtual key itself. Lets the Playground show this key's
+    allowed providers and whether each has a real API key behind it."""
+    rows = [
+        {"provider": p, "ready": live_key_for(db, vk, p) is not None}
+        for p in vk.provider_names()
+    ]
     return KeyInspect(label=vk.label, allow_live=vk.allow_live, providers=rows)
 
 
@@ -70,8 +60,6 @@ def proxy_chat(
         request_id=row.request_id,
         provider=body.provider,
         model=body.model,
-        mode=result.mode,
-        simulated=result.simulated,
         response=result.text,
         usage=Usage(
             prompt_tokens=result.prompt_tokens,

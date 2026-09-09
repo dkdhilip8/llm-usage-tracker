@@ -527,7 +527,7 @@ function CreateKeyForm({
         <p className="text-[11px] text-fg-subtle">
           {willBeLive
             ? "This key makes live calls on the workspace's provider key, under that provider's monthly cap. Pause it any time from the table below."
-            : "Add a configured provider above — until then this key runs simulated."}
+            : "Add a configured provider above — a key with no provider key returns an error, not a response."}
         </p>
 
         <button
@@ -774,7 +774,7 @@ export function Workspace() {
                         disabled={!keyLiveReady(k) && !k.allow_live}
                         title={
                           k.allow_live
-                            ? "Pause live calls for this key (runs simulated)"
+                            ? "Pause this key (its requests will return 403 until re-enabled)"
                             : keyLiveReady(k)
                               ? "Resume live calls for this key"
                               : "No provider key for this key's providers — add one under Provider keys"

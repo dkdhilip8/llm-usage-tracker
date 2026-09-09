@@ -2,8 +2,9 @@
 
 `routers/proxy.py` (friendly shape, used by the Playground) and
 `routers/openai_compat.py` (OpenAI `/v1/chat/completions` shape) both build on these:
-target resolution + provider ACL, monthly-budget enforcement, the simulate-vs-live
-decision, and the usage-log write."""
+target resolution + provider ACL, budget + workspace-cap enforcement, the real
+upstream call, and the usage-log write. There is no simulator — a request either
+hits a real provider or returns an error."""
 
 import time
 from collections import defaultdict, deque
@@ -20,7 +21,6 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import ProviderCredential, UsageLog, VirtualKey
 from app.pricing import PROVIDERS, estimate_cost, price_for
-from app.simulator import simulate_chat
 
 # in-process per-workspace Playground rate limiter (best-effort, single instance)
 _pg_hits: dict[int, deque[float]] = defaultdict(deque)
@@ -70,17 +70,12 @@ class CompletionResult:
     prompt_tokens: int
     completion_tokens: int
     cost: float
-    cost_source: str  # "provider" | "configured"
-    mode: str  # "live" | "simulated"
+    cost_source: str  # "provider" (real charge) | "configured" (tokens x price table)
     latency_ms: int
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
-
-    @property
-    def simulated(self) -> bool:
-        return self.mode == "simulated"
 
     def pricing_block(self, provider: str, model: str) -> dict:
         p = price_for(provider, model)
@@ -193,9 +188,8 @@ def workspace_has_live_provider(
     db: Session, workspace_id: int, provider_names: list[str]
 ) -> bool:
     """True when a real provider key exists for at least one of `provider_names` —
-    a server env var, or one the workspace has attached. A key with no configured
-    provider would silently fall back to simulated, so callers use this to refuse
-    `allow_live`."""
+    a server env var, or one the workspace has attached. Used to refuse `allow_live`
+    on a key whose providers have nothing behind them (it would only ever 402)."""
     if any(providers.is_configured(p) for p in provider_names):
         return True
     attached = set(
@@ -264,34 +258,64 @@ def enforce_workspace_cap(db: Session, vk: VirtualKey, provider: str) -> None:
         )
 
 
+def require_live_ready(db: Session, vk: VirtualKey, provider: str) -> str:
+    """The API key a live call will use, or an HTTPException explaining why it can't."""
+    if not vk.allow_live:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "this key is paused — turn live calls on for it on the Workspace page",
+                "type": "key_paused",
+                "code": "403",
+            },
+        )
+    key = live_key_for(db, vk, provider)
+    if key is None:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "message": (
+                    f"no {provider} API key is configured for this workspace — "
+                    "add one on the Workspace page"
+                ),
+                "type": "provider_not_configured",
+                "code": "402",
+            },
+        )
+    return key
+
+
 def run_completion(
     db: Session, vk: VirtualKey, provider: str, model: str, prompt: str
 ) -> CompletionResult:
-    key = live_key_for(db, vk, provider)
-    go_live = settings.ENABLE_LIVE and vk.allow_live and key is not None
-    actual_cost: float | None = None
-    if go_live:
-        try:
-            t0 = time.perf_counter()
-            text, pt, ct, actual_cost = providers.call_provider(
-                provider, model, prompt, api_key=key
-            )
-            latency_ms = int((time.perf_counter() - t0) * 1000)
-            mode = "live"
-        except Exception as exc:  # fall back to simulated rather than 5xx
-            text, pt, ct, latency_ms = simulate_chat(provider, model, prompt)
-            text = f"[live call failed, simulated instead: {exc}] {text}"
-            mode, actual_cost = "simulated", None
-    else:
-        text, pt, ct, latency_ms = simulate_chat(provider, model, prompt)
-        mode = "simulated"
+    key = require_live_ready(db, vk, provider)
+    t0 = time.perf_counter()
+    try:
+        text, pt, ct, actual_cost = providers.call_provider(
+            provider, model, prompt, api_key=key
+        )
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        failed = CompletionResult(
+            f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
+        )
+        record_usage(db, vk, provider, model, prompt, failed, status="error")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"{provider} call failed: {exc}",
+                "type": "upstream_error",
+                "code": "502",
+            },
+        ) from exc
+    latency_ms = int((time.perf_counter() - t0) * 1000)
 
     if actual_cost is not None:
         cost, cost_source = round(actual_cost, 6), "provider"
     else:
         cost, cost_source = estimate_cost(provider, model, pt, ct), "configured"
 
-    return CompletionResult(text, pt, ct, cost, cost_source, mode, latency_ms)
+    return CompletionResult(text, pt, ct, cost, cost_source, latency_ms)
 
 
 def _preview(text: str, limit: int = 500) -> str:
@@ -320,8 +344,8 @@ def record_usage(
         total_tokens=result.total_tokens,
         cost=result.cost,
         cost_source=result.cost_source,
-        simulated=result.simulated,
-        mode=result.mode,
+        simulated=False,
+        mode="live",
         latency_ms=result.latency_ms,
         status=status,
         prompt_preview=_preview(prompt) if settings.LOG_BODIES else None,

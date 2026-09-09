@@ -100,7 +100,7 @@ def test_env_var_blocks_workspace_key(admin_client, monkeypatch):
     assert r.status_code == 409
 
 
-def test_live_spend_cap_is_per_provider(admin_client):
+def test_live_spend_cap_is_per_provider(admin_client, mock_provider):
     admin_client.put(
         "/api/workspace/providers/openrouter/key", json={"api_key": "sk-or-v1-teamkey"}
     )

@@ -22,9 +22,9 @@ services:
       DATABASE_URL: postgresql+psycopg://llm:llm@db:5432/llmtracker
       SECRET_KEY: dev-secret
       CORS_ORIGINS: http://localhost:5173
-      # Provider creds + live switch come from the gitignored ./.env (never committed).
-      # Absent .env => all blank, ENABLE_LIVE=false => dry-run (simulated) mode.
-      ENABLE_LIVE: ${ENABLE_LIVE:-false}
+      # Provider creds come from the gitignored ./.env (never committed). Absent
+      # .env => all blank => every proxied request 402s until a workspace attaches
+      # its own provider key in-app.
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}

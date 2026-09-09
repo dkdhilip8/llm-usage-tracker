@@ -10,7 +10,7 @@ import {
 import { Card } from "../components/Card";
 import { relTime, usd } from "../lib/format";
 
-const FILTER_KEYS = ["key_id", "provider", "model", "status", "mode", "start", "end"] as const;
+const FILTER_KEYS = ["key_id", "provider", "model", "status", "start", "end"] as const;
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -146,17 +146,6 @@ export function Requests() {
             ))}
           </select>
         </Field>
-        <Field label="Mode">
-          <select
-            className="rounded border border-line bg-surface px-2 py-1 text-xs"
-            value={params.get("mode") ?? ""}
-            onChange={(e) => setFilter("mode", e.target.value)}
-          >
-            <option value="">All</option>
-            <option value="live">Live</option>
-            <option value="simulated">Simulated</option>
-          </select>
-        </Field>
         <Field label="Status">
           <select
             className="rounded border border-line bg-surface px-2 py-1 text-xs"
@@ -208,7 +197,6 @@ export function Requests() {
                 <th className="py-2 pr-3">When</th>
                 <th className="py-2 pr-3">Key</th>
                 <th className="py-2 pr-3">Model</th>
-                <th className="py-2 pr-3 text-center">Mode</th>
                 <th className="py-2 pr-3 text-right">Tokens</th>
                 <th className="py-2 pr-3 text-right">Cost</th>
                 <th className="py-2 pr-3 text-right">Latency</th>
@@ -218,7 +206,7 @@ export function Requests() {
             <tbody>
               {rows.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="py-8 text-center text-fg-subtle">
+                  <td colSpan={7} className="py-8 text-center text-fg-subtle">
                     No requests yet.
                   </td>
                 </tr>
@@ -233,17 +221,6 @@ export function Requests() {
                   <td className="py-2 pr-3">{r.key_label}</td>
                   <td className="py-2 pr-3 font-mono text-xs">
                     {r.provider}/{r.model}
-                  </td>
-                  <td className="py-2 pr-3 text-center">
-                    <span
-                      className={`rounded px-1.5 py-0.5 text-[10px] font-bold uppercase ${
-                        r.mode === "live"
-                          ? "bg-emerald-100 dark:bg-emerald-500/15 text-emerald-700 dark:text-emerald-400"
-                          : "bg-amber-100 dark:bg-amber-500/15 text-amber-700 dark:text-amber-400"
-                      }`}
-                    >
-                      {r.mode}
-                    </span>
                   </td>
                   <td className="py-2 pr-3 text-right tabular-nums">{r.total_tokens}</td>
                   <td className="py-2 pr-3 text-right tabular-nums">
@@ -301,7 +278,6 @@ export function Requests() {
                 ["Time", new Date(open.ts).toLocaleString()],
                 ["Key", `${open.key_label} (${open.key_prefix}…)`],
                 ["Provider / model", `${open.provider}/${open.model}`],
-                ["Mode", open.mode],
                 [
                   "Tokens",
                   `${open.prompt_tokens} prompt · ${open.completion_tokens} completion · ${open.total_tokens} total`,

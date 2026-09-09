@@ -26,7 +26,6 @@ def list_requests(
     model: str | None = None,
     key_id: int | None = None,
     status: str | None = None,
-    mode: str | None = None,
     start: datetime | None = None,
     end: datetime | None = None,
     db: Session = Depends(get_db),
@@ -54,8 +53,6 @@ def list_requests(
         stmt = stmt.where(UsageLog.key_id == key_id)
     if status:
         stmt = stmt.where(UsageLog.status == status)
-    if mode:
-        stmt = stmt.where(UsageLog.mode == mode)
 
     rows = db.execute(stmt).all()
     has_more = len(rows) > limit
@@ -71,7 +68,6 @@ def list_requests(
             "key_prefix": prefix,
             "provider": u.provider,
             "model": u.model,
-            "mode": u.mode,
             "prompt_tokens": u.prompt_tokens,
             "completion_tokens": u.completion_tokens,
             "total_tokens": u.total_tokens,

@@ -15,16 +15,21 @@ READ_ENDPOINTS = [
 
 
 @pytest.fixture()
-def two_workspaces(new_admin):
+def two_workspaces(new_admin, mock_provider):
     a, _ = new_admin("Acme")
     b, _ = new_admin("Globex")
-    # Acme mints a key and drives one request through the gateway
-    k = a.post("/api/keys", json={"label": "acme-key", "allowed_providers": ["openrouter"]}).json()
-    a.post(
+    # Acme configures a provider key, mints a live key, drives one real request
+    a.put("/api/workspace/providers/openrouter/key", json={"api_key": "sk-fake-or-000000"})
+    k = a.post(
+        "/api/keys",
+        json={"label": "acme-key", "allowed_providers": ["openrouter"], "allow_live": True},
+    ).json()
+    r = a.post(
         "/v1/proxy/chat",
         json={"provider": "openrouter", "model": OR_MODEL, "prompt": "acme only"},
         headers={"Authorization": f"Bearer {k['key']}"},
     )
+    assert r.status_code == 200, r.text
     return a, b, k
 
 

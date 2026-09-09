@@ -61,11 +61,7 @@ if settings.cors_origins_list:
 
 @app.get("/healthz")
 def healthz() -> dict:
-    return {
-        "status": "ok",
-        "version": settings.VERSION,
-        "live_enabled": settings.ENABLE_LIVE,
-    }
+    return {"status": "ok", "version": settings.VERSION}
 
 
 app.include_router(auth.router)

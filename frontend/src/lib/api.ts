@@ -136,7 +136,6 @@ export interface RequestRow {
   key_prefix: string;
   provider: string;
   model: string;
-  mode: "simulated" | "live";
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
@@ -151,12 +150,7 @@ export interface RequestRow {
 export interface KeyInspect {
   label: string;
   allow_live: boolean;
-  providers: {
-    provider: string;
-    configured: boolean;
-    valid: boolean;
-    mode: "simulated" | "live";
-  }[];
+  providers: { provider: string; ready: boolean }[]; // ready = a workspace key exists
 }
 
 export interface UsageSummary {
@@ -207,8 +201,6 @@ export interface ChatResult {
   request_id: string;
   provider: string;
   model: string;
-  mode: "simulated" | "live";
-  simulated: boolean;
   response: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
   cost: number;
@@ -218,8 +210,7 @@ export interface ChatResult {
 }
 
 export const api = {
-  health: () =>
-    req<{ status: string; version: string; live_enabled: boolean }>("/healthz"),
+  health: () => req<{ status: string; version: string }>("/healthz"),
   models: () => req<ModelInfo[]>("/api/models"),
 
   // ---- auth ----

@@ -9,8 +9,6 @@ import os
 
 # Force test values — override anything the container/.env already set.
 os.environ["SECRET_KEY"] = "test-secret"
-os.environ["ENABLE_LIVE"] = "false"
-os.environ["SIMULATE_LATENCY_SLEEP"] = "false"
 os.environ["LOG_BODIES"] = "true"
 os.environ["SIGNUPS_PER_IP_PER_HOUR"] = "1000"  # a throttle test lowers this itself
 os.environ["JOINS_PER_IP_PER_HOUR"] = "1000"
@@ -87,6 +85,39 @@ def _clean_tables():
     yield
 
 
+@pytest.fixture(autouse=True)
+def _no_network(monkeypatch):
+    """No test should make a real HTTP call. Liveness checks return False without
+    hitting the network; `mock_provider` (opt-in) stubs the actual completion."""
+    monkeypatch.setattr("app.providers.check_key", lambda provider, key: False)
+    monkeypatch.setattr(
+        "app.providers.check_liveness", lambda provider, **kw: False
+    )
+
+
+@pytest.fixture()
+def mock_provider(monkeypatch):
+    """Stub the upstream completion + stream. Returns the list of recorded calls.
+    By default cost is unreported (=> cost_source 'configured'); pass
+    `mock_provider.cost = 0.002` style via the returned object is not supported —
+    use monkeypatch directly for the provider-cost path."""
+    calls: list[tuple] = []
+
+    def fake_call(provider, model, prompt, api_key=None):
+        calls.append((provider, model, prompt, api_key))
+        return (f"reply to: {prompt}", 5, 7, None)
+
+    def fake_stream(provider, model, prompt, api_key=None):
+        calls.append((provider, model, prompt, api_key))
+        yield ("delta", "hello ")
+        yield ("delta", "world")
+        yield ("done", {"prompt_tokens": 5, "completion_tokens": 7, "cost": None})
+
+    monkeypatch.setattr("app.providers.call_provider", fake_call)
+    monkeypatch.setattr("app.providers.stream_openai_compatible", fake_stream)
+    return calls
+
+
 def _signup(c: TestClient, username: str, password: str = "pw-abcdefgh") -> dict:
     r = c.post("/api/auth/signup", json={"username": username, "password": password})
     assert r.status_code == 200, r.text
@@ -159,6 +190,30 @@ def new_member():
 def make_key(admin_client):
     def _make(**over) -> dict:
         body = {"label": "t", "allowed_providers": ["openrouter"], **over}
+        r = admin_client.post("/api/keys", json=body)
+        assert r.status_code == 200, r.text
+        return r.json()
+
+    return _make
+
+
+@pytest.fixture()
+def make_live_key(admin_client):
+    """Attaches a (fake) key for every provider to the admin's workspace, then
+    mints keys that default to allow_live=True. Pair with `mock_provider`."""
+    for p in ("openrouter", "openai", "anthropic", "gemini"):
+        r = admin_client.put(
+            f"/api/workspace/providers/{p}/key", json={"api_key": f"sk-fake-{p}-key-000000"}
+        )
+        assert r.status_code == 200, r.text
+
+    def _make(**over) -> dict:
+        body = {
+            "label": "t",
+            "allowed_providers": ["openrouter"],
+            "allow_live": True,
+            **over,
+        }
         r = admin_client.post("/api/keys", json=body)
         assert r.status_code == 200, r.text
         return r.json()
