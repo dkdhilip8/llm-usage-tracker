@@ -1,26 +1,66 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { api, type RequestRow } from "../lib/api";
+import {
+  api,
+  PROVIDERS,
+  type KeyRow,
+  type ModelInfo,
+  type RequestRow,
+} from "../lib/api";
 import { Card } from "../components/Card";
 import { relTime, usd } from "../lib/format";
 
 const FILTER_KEYS = ["key_id", "provider", "model", "status", "mode", "start", "end"] as const;
 
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="flex flex-col gap-1">
+      <span className="text-[10px] uppercase tracking-wide text-fg-subtle">{label}</span>
+      {children}
+    </label>
+  );
+}
+
 export function Requests() {
   const navigate = useNavigate();
-  const [params] = useSearchParams();
+  const [params, setParams] = useSearchParams();
   const [rows, setRows] = useState<RequestRow[]>([]);
   const [cursor, setCursor] = useState<number | null>(null);
   const [more, setMore] = useState(false);
   const [bodiesLogged, setBodiesLogged] = useState(true);
   const [open, setOpen] = useState<RequestRow | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [models, setModels] = useState<ModelInfo[]>([]);
+  const [keys, setKeys] = useState<KeyRow[]>([]);
+
+  useEffect(() => {
+    api.models().then(setModels).catch(() => setModels([]));
+    api.listKeys().then(setKeys).catch(() => setKeys([]));
+  }, []);
 
   const activeFilters: [string, string][] = FILTER_KEYS.flatMap((k) => {
     const v = params.get(k);
     return v != null ? [[k, v] as [string, string]] : [];
   });
   const filterKey = params.toString();
+  const hasFilters = activeFilters.length > 0;
+
+  const setFilter = useCallback(
+    (key: string, value: string) => {
+      const next = new URLSearchParams(params);
+      if (value) next.set(key, value);
+      else next.delete(key);
+      if (key === "provider") next.delete("model"); // model list depends on provider
+      setParams(next, { replace: true });
+    },
+    [params, setParams],
+  );
+
+  const modelOptions = useMemo(() => {
+    const p = params.get("provider");
+    const list = p ? models.filter((m) => m.provider === p) : models;
+    return list.map((m) => m.model);
+  }, [models, params]);
 
   const load = useCallback(
     (after: number | null) => {
@@ -62,27 +102,97 @@ export function Requests() {
           {error}
         </div>
       )}
-      {activeFilters.length > 0 && (
-        <div className="flex flex-wrap items-center gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-xs">
-          <span className="text-fg-subtle">Filtered:</span>
-          {activeFilters.map(([k, v]) => (
-            <span
-              key={k}
-              className="rounded bg-fill px-1.5 py-0.5 font-mono text-[11px] text-fg-muted"
-            >
-              {k === "start" || k === "end"
-                ? `${k}=${new Date(v).toLocaleString()}`
-                : `${k}=${v}`}
-            </span>
-          ))}
+
+      <div className="flex flex-wrap items-end gap-2 rounded-md border border-line bg-surface-2 px-3 py-2 text-xs">
+        <Field label="Key">
+          <select
+            className="rounded border border-line bg-surface px-2 py-1 text-xs"
+            value={params.get("key_id") ?? ""}
+            onChange={(e) => setFilter("key_id", e.target.value)}
+          >
+            <option value="">All keys</option>
+            {keys.map((k) => (
+              <option key={k.id} value={k.id}>
+                {k.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Provider">
+          <select
+            className="rounded border border-line bg-surface px-2 py-1 text-xs capitalize"
+            value={params.get("provider") ?? ""}
+            onChange={(e) => setFilter("provider", e.target.value)}
+          >
+            <option value="">All</option>
+            {PROVIDERS.map((p) => (
+              <option key={p} value={p}>
+                {p}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Model">
+          <select
+            className="rounded border border-line bg-surface px-2 py-1 text-xs"
+            value={params.get("model") ?? ""}
+            onChange={(e) => setFilter("model", e.target.value)}
+          >
+            <option value="">All</option>
+            {modelOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Mode">
+          <select
+            className="rounded border border-line bg-surface px-2 py-1 text-xs"
+            value={params.get("mode") ?? ""}
+            onChange={(e) => setFilter("mode", e.target.value)}
+          >
+            <option value="">All</option>
+            <option value="live">Live</option>
+            <option value="simulated">Simulated</option>
+          </select>
+        </Field>
+        <Field label="Status">
+          <select
+            className="rounded border border-line bg-surface px-2 py-1 text-xs"
+            value={params.get("status") ?? ""}
+            onChange={(e) => setFilter("status", e.target.value)}
+          >
+            <option value="">All</option>
+            <option value="success">Success</option>
+            <option value="error">Error</option>
+          </select>
+        </Field>
+        <Field label="From">
+          <input
+            type="date"
+            className="rounded border border-line bg-surface px-2 py-1 text-xs"
+            value={(params.get("start") ?? "").slice(0, 10)}
+            onChange={(e) => setFilter("start", e.target.value)}
+          />
+        </Field>
+        <Field label="To">
+          <input
+            type="date"
+            className="rounded border border-line bg-surface px-2 py-1 text-xs"
+            value={(params.get("end") ?? "").slice(0, 10)}
+            onChange={(e) => setFilter("end", e.target.value)}
+          />
+        </Field>
+        {hasFilters && (
           <button
             onClick={() => navigate("/requests")}
-            className="ml-auto text-brand-600 hover:underline"
+            className="ml-auto self-center text-brand-600 hover:underline"
           >
-            Clear
+            Clear all
           </button>
-        </div>
-      )}
+        )}
+      </div>
       {!bodiesLogged && (
         <div className="rounded-md border border-line bg-surface-2 px-3 py-2 text-xs text-fg-muted">
           Prompt / response bodies are not stored (set <code>LOG_BODIES=true</code> to capture
