@@ -164,6 +164,23 @@ def mock_provider(monkeypatch):
                 "output": [],
                 "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
             }
+        if "generativelanguage.googleapis.com" in url:
+            return {
+                "candidates": [
+                    {
+                        "content": {"role": "model", "parts": [{"text": text}]},
+                        "finishReason": "STOP",
+                        "index": 0,
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 5,
+                    "candidatesTokenCount": 7,
+                    "totalTokenCount": 12,
+                },
+                "modelVersion": json_body.get("model", ""),
+                "responseId": f"gemini_test_{n}",
+            }
         return {
             "id": f"chatcmpl_test_{n}",
             "object": "chat.completion",
@@ -213,6 +230,28 @@ def mock_provider(monkeypatch):
             )
             yield ""
             yield "data: [DONE]"
+        elif "generativelanguage.googleapis.com" in url:
+            yield "data: " + json.dumps(
+                {
+                    "candidates": [
+                        {"content": {"role": "model", "parts": [{"text": "hello "}]}, "index": 0}
+                    ],
+                    "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 3},
+                }
+            )
+            yield ""
+            yield "data: " + json.dumps(
+                {
+                    "candidates": [
+                        {
+                            "content": {"role": "model", "parts": [{"text": "world"}]},
+                            "finishReason": "STOP",
+                            "index": 0,
+                        }
+                    ],
+                    "usageMetadata": {"promptTokenCount": 5, "candidatesTokenCount": 7, "totalTokenCount": 12},
+                }
+            )
         else:
             base = {
                 "id": "chatcmpl_test",

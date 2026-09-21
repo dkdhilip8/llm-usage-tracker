@@ -106,12 +106,30 @@ def require_user(user: User | None = Depends(current_user)) -> User:
 
 def require_virtual_key(
     authorization: str = Header(default=""),
+    x_api_key: str = Header(default="", alias="x-api-key"),
+    x_goog_api_key: str = Header(default="", alias="x-goog-api-key"),
     db: Session = Depends(get_db),
 ) -> VirtualKey:
-    """A valid, non-revoked, unexpired virtual key is mandatory — this is a gateway."""
-    if not authorization.lower().startswith("bearer "):
-        raise HTTPException(401, "missing 'Authorization: Bearer vk_...'")
-    raw = authorization.split(" ", 1)[1].strip()
+    """A valid, non-revoked, unexpired virtual key is mandatory — this is a gateway.
+
+    Accepted in whichever header a provider's own official SDK sends its API
+    key in by default, so pointing an SDK's base_url at this gateway needs no
+    header override: `Authorization: Bearer vk_...` (OpenAI/OpenRouter SDKs,
+    and the generic case), `x-api-key: vk_...` (Anthropic SDK's default
+    `api_key=` auth), `x-goog-api-key: vk_...` (Gemini SDK)."""
+    raw = ""
+    if authorization.lower().startswith("bearer "):
+        raw = authorization.split(" ", 1)[1].strip()
+    elif x_api_key:
+        raw = x_api_key.strip()
+    elif x_goog_api_key:
+        raw = x_goog_api_key.strip()
+    if not raw:
+        raise HTTPException(
+            401,
+            "missing virtual key — send 'Authorization: Bearer vk_...', "
+            "'x-api-key: vk_...', or 'x-goog-api-key: vk_...'",
+        )
     vk = db.scalar(
         select(VirtualKey).where(
             VirtualKey.key_hash == key_hash(raw),
