@@ -1,10 +1,11 @@
-"""Native Gemini `generateContent` / `streamGenerateContent` adapter. The
-gateway validates only `model` (taken from the URL path, matching Google's
-own REST shape); everything else in the client's JSON body — `contents`
-(with `inline_data`/`file_data` parts for multimodal input), `systemInstruction`,
-`generationConfig`, `tools` (function declarations, code execution, Google
-Search grounding), `toolConfig`, `safetySettings`, `cachedContent` — is
-forwarded to Gemini untouched.
+"""Native Gemini `generateContent` / `streamGenerateContent` adapter, plus
+`embedContent` / `batchEmbedContents`. The gateway validates only `model`
+(taken from the URL path, matching Google's own REST shape); everything else
+in the client's JSON body — `contents` (with `inline_data`/`file_data` parts
+for multimodal input), `systemInstruction`, `generationConfig`, `tools`
+(function declarations, code execution, Google Search grounding),
+`toolConfig`, `safetySettings`, `cachedContent` — is forwarded to Gemini
+untouched.
 
 Deliberately NOT covered here: the Interactions API's stateful
 (`previous_interaction_id`) and async (`background=true`) modes — see the
@@ -106,3 +107,53 @@ def prompt_preview(body: dict) -> str:
         return ""
     texts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
     return " ".join(t for t in texts if t)
+
+
+# ---- Embeddings (embedContent / batchEmbedContents) — no streaming ----
+def embed_content(model: str, body: dict, api_key: str) -> dict:
+    url = f"{_BASE}/models/{model}:embedContent"
+    return providers.send_request(url, _headers(api_key), body)
+
+
+def batch_embed_contents(model: str, body: dict, api_key: str) -> dict:
+    url = f"{_BASE}/models/{model}:batchEmbedContents"
+    return providers.send_request(url, _headers(api_key), body)
+
+
+def extract_embed_usage(response: dict) -> UsageInfo:
+    usage = response.get("usageMetadata") or {}
+    raw = {"promptTokenDetails": usage["promptTokenDetails"]} if "promptTokenDetails" in usage else {}
+    return UsageInfo(
+        prompt_tokens=int(usage.get("promptTokenCount", 0)),
+        completion_tokens=0,  # embeddings bill input tokens only
+        cost=None,
+        raw=raw,
+    )
+
+
+def embed_preview(response: dict) -> str:
+    if "embeddings" in response:
+        return f"{len(response.get('embeddings') or [])} embedding(s)"
+    return "1 embedding" if "embedding" in response else "0 embeddings"
+
+
+def _content_text(content: dict | None) -> str:
+    parts = (content or {}).get("parts")
+    if not isinstance(parts, list):
+        return ""
+    texts = [p.get("text", "") for p in parts if isinstance(p, dict) and "text" in p]
+    return " ".join(t for t in texts if t)
+
+
+def embed_prompt_preview(body: dict) -> str:
+    """Single embedContent request — one `content` field (not `contents`)."""
+    return _content_text(body.get("content"))
+
+
+def batch_embed_prompt_preview(body: dict) -> str:
+    reqs = body.get("requests") or []
+    if not reqs:
+        return ""
+    first = _content_text(reqs[0].get("content")) if isinstance(reqs[0], dict) else ""
+    extra = f" (+{len(reqs) - 1} more)" if len(reqs) > 1 else ""
+    return first + extra

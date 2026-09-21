@@ -13,6 +13,7 @@ from app.db import Base, SessionLocal, engine
 from app.routers import (
     account,
     auth,
+    embeddings,
     gemini,
     keys,
     messages,
@@ -83,6 +84,7 @@ app.include_router(proxy.router)
 app.include_router(openai_compat.router)
 app.include_router(messages.router)
 app.include_router(responses.router)
+app.include_router(embeddings.router)
 app.include_router(gemini.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)

@@ -27,8 +27,10 @@ usage and cost on a dashboard. OpenAI · Anthropic · OpenRouter · Google Gemin
 > Messages: system prompt, content blocks, tool use, prompt caching), `/v1/responses` (OpenAI
 > Responses API), and `/v1beta/models/{model}:generateContent` /
 > `:streamGenerateContent` (Gemini: `contents`/`parts`, `systemInstruction`, function calling,
-> built-in tools, multimodal `inline_data`/`file_data`). Point the real `openai`/`anthropic`/
-> `google-genai` SDK's `base_url` at the gateway and it works unmodified: multi-turn history,
+> built-in tools, multimodal `inline_data`/`file_data`), and `/v1/embeddings` /
+> `:embedContent` / `:batchEmbedContents` (OpenAI and Gemini embeddings — Anthropic has none of
+> its own). Point the real `openai`/`anthropic`/`google-genai` SDK's `base_url` at the gateway and
+> it works unmodified: multi-turn history,
 > tools/function-calling, structured outputs, and multimodal content parts all ride through
 > untouched — the gateway validates only `model` and never reconstructs the request field-by-field.
 > Each SDK's own default auth header is honored (`Authorization: Bearer`, `x-api-key`, or
@@ -277,16 +279,21 @@ membership (`403` if signed in but not in one).
 | **POST** | **`/v1/responses`** | Bearer `vk_…` | **OpenAI Responses API passthrough** (`openai` only). `{model, input, tools?, stream?, ...}` forwarded almost verbatim → the real OpenAI response. |
 | **POST** | **`/v1beta/models/{model}:generateContent`** | `x-goog-api-key: vk_…` | **Gemini native passthrough** (`gemini` only). `{contents[], systemInstruction?, generationConfig?, tools?, toolConfig?, ...}` forwarded almost verbatim → the real Gemini response. `model` comes from the URL path, matching Gemini's own REST shape. |
 | **POST** | **`/v1beta/models/{model}:streamGenerateContent`** | `x-goog-api-key: vk_…` | Same, real `alt=sse` streaming passthrough. |
+| **POST** | **`/v1/embeddings`** | Bearer `vk_…` | **OpenAI Embeddings passthrough** (`openai` only). `{model, input, dimensions?, encoding_format?, ...}` forwarded almost verbatim → the real OpenAI response. No streaming — the API doesn't support it. |
+| **POST** | **`/v1beta/models/{model}:embedContent`** | `x-goog-api-key: vk_…` | **Gemini Embeddings passthrough** (`gemini` only). `{content, taskType?, outputDimensionality?, ...}` forwarded almost verbatim. |
+| **POST** | **`/v1beta/models/{model}:batchEmbedContents`** | `x-goog-api-key: vk_…` | Same, batched: `{requests: [{content, ...}, ...]}` → embeds every entry in one call. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + `{provider, ready}` (ready = a workspace key exists) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
 
 The proxy (`/v1/*`, `/v1beta/*`) requires a `vk_…` key and is workspace-agnostic — the key itself
 is the credential, accepted in whichever header a provider's own SDK sends it in by default
 (`Authorization: Bearer`, `x-api-key`, or `x-goog-api-key` — all three resolve the same key).
-`/v1/messages`, `/v1/responses`, and the Gemini native endpoints validate only `model`
-server-side; everything else in the request body is the client's own JSON, sent upstream
+`/v1/messages`, `/v1/responses`, `/v1/embeddings`, and the Gemini native endpoints validate only
+`model` server-side; everything else in the request body is the client's own JSON, sent upstream
 unmodified — the real `anthropic` / `openai` / `google-genai` SDKs work by pointing `base_url` at
-the gateway with no other code change (see "Example integrations" below).
+the gateway with no other code change (see "Example integrations" below). Anthropic has no
+embeddings API of its own (their docs point integrators at a third party) — there's nothing to
+proxy there.
 
 ### Example integrations
 
@@ -296,16 +303,18 @@ from openai import OpenAI
 client = OpenAI(base_url="https://<host>/v1", api_key="vk_...")
 client.chat.completions.create(model="openai/gpt-4o-mini", messages=[...], tools=[...])
 client.responses.create(model="gpt-4o-mini", input="...", tools=[...])
+client.embeddings.create(model="text-embedding-3-small", input="hello")
 
 # Anthropic SDK — native Messages API
 from anthropic import Anthropic
 client = Anthropic(base_url="https://<host>", api_key="vk_...")
 client.messages.create(model="claude-3-5-sonnet-20241022", max_tokens=1024, messages=[...])
 
-# Google GenAI SDK — native generateContent
+# Google GenAI SDK — native generateContent + embeddings
 from google import genai
 client = genai.Client(api_key="vk_...", http_options={"base_url": "https://<host>"})
 client.models.generate_content(model="gemini-2.5-flash", contents="hi")
+client.models.embed_content(model="gemini-embedding-001", contents="hi")
 
 # LangChain — point it at the gateway like any OpenAI-compatible endpoint
 from langchain_openai import ChatOpenAI
@@ -375,19 +384,20 @@ every key created before them.
 ### Adapter architecture
 
 `app/adapters/` holds one module per provider (`openai_adapter.py` covers both OpenAI and
-OpenRouter, which share the Chat Completions wire format; `anthropic_adapter.py` covers
-Anthropic's Messages API; `gemini_adapter.py` covers Gemini's `generateContent` /
-`streamGenerateContent`). Each adapter owns its own request construction and response
-parsing — the governance layer above it (`app/gateway.py`: auth, provider/model ACL, budgets,
-workspace caps) and the HTTP layer below it (`app/providers.py::send_request` /
-`stream_request`, the single outbound-HTTP chokepoint every adapter and the legacy
-`call_provider`/`stream_openai_compatible` functions funnel through) are shared; the
-provider-specific shape in between is deliberately **not** collapsed into one common format. A
-non-streaming native call returns the provider's raw JSON to the client, untouched;
-`app/adapters/base.py::UsageInfo` is only what governance/logging need, pulled out of that real
-response. Gemini's `usageMetadata` is cumulative per streamed chunk (unlike Anthropic's two
-split SSE events), so `GeminiStreamUsageAccumulator` just keeps the latest values rather than
-summing deltas.
+OpenRouter, which share the Chat Completions wire format, plus the Responses API and
+Embeddings; `anthropic_adapter.py` covers Anthropic's Messages API; `gemini_adapter.py` covers
+Gemini's `generateContent`/`streamGenerateContent` and `embedContent`/`batchEmbedContents`).
+Each adapter owns its own request construction and response parsing — the governance layer
+above it (`app/gateway.py`: auth, provider/model ACL, budgets, workspace caps) and the HTTP layer
+below it (`app/providers.py::send_request`/`stream_request`, the single outbound-HTTP chokepoint
+every adapter and the legacy `call_provider`/`stream_openai_compatible` functions funnel through)
+are shared; the provider-specific shape in between is deliberately **not** collapsed into one
+common format. A non-streaming native call returns the provider's raw JSON to the client,
+untouched; `app/adapters/base.py::UsageInfo` is only what governance/logging need, pulled out of
+that real response. Gemini's `usageMetadata` is cumulative per streamed chunk (unlike
+Anthropic's two split SSE events), so `GeminiStreamUsageAccumulator` just keeps the latest values
+rather than summing deltas. Embeddings never stream (no provider offers it) and always report
+`completion_tokens=0` — the wire format has no output tokens to count.
 
 ### What's not proxied (and why)
 
@@ -398,6 +408,12 @@ summing deltas.
   upload + reference-by-id + poll/webhook lifecycles are a different protocol shape than
   synchronous chat, and imply tracking an object that outlives any single request — no such
   concept exists in the schema today.
+- **Image generation and audio (transcription/speech) APIs** — a different billable unit
+  (per-image, per-second) than the token-based `prompt_tokens`/`completion_tokens`/`cost` shape
+  every other endpoint here shares; wiring these in needs its own usage-row design, not just
+  another adapter module.
+- **Anthropic embeddings** — Anthropic has no embeddings API of its own; their docs point
+  integrators at a third party (Voyage AI). Nothing to proxy.
 - **Gemini's Interactions API, and its stateful/background modes in particular** (`store:true`
   server-side history, `background:true` async execution) — the gateway targets the simpler,
   stateless `generateContent`/`streamGenerateContent` surface (Google's own recommendation for
@@ -409,9 +425,9 @@ summing deltas.
 
 ## Future improvements
 
-Embeddings / image / audio APIs, model-registry admin UI, a LangGraph end-to-end test harness
-(Phase 3) · Gemini built-in tools (code execution, Search grounding) test coverage · per-key rate
-limits (RPM/TPM) · per-model budgets · webhook/Slack alerts · usage-anomaly detection · Prometheus
-`/metrics` · exact-match response cache · provider fallback on live error · Alembic migrations +
-backups · Redis for shared rate-limit / budget counters · SSO / org hierarchy · OpenTelemetry
-traces.
+Image / audio APIs, model-registry admin UI, a LangGraph end-to-end test harness (Phase 3
+continued) · Gemini built-in tools (code execution, Search grounding) test coverage · per-key
+rate limits (RPM/TPM) · per-model budgets · webhook/Slack alerts · usage-anomaly detection ·
+Prometheus `/metrics` · exact-match response cache · provider fallback on live error · Alembic
+migrations + backups · Redis for shared rate-limit / budget counters · SSO / org hierarchy ·
+OpenTelemetry traces.

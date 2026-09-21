@@ -33,6 +33,9 @@ CONFIGURED_PRICING: dict[tuple[str, str], Pricing] = {
     ("gemini", "gemini-2.5-flash"): {"input": 0.30, "output": 2.50},
     ("gemini", "gemini-2.5-flash-lite"): {"input": 0.10, "output": 0.40},
     ("gemini", "gemini-2.5-pro"): {"input": 1.25, "output": 10.00},
+    # Embeddings bill input tokens only — output is always 0.
+    ("openai", "text-embedding-3-small"): {"input": 0.02, "output": 0.0},
+    ("openai", "text-embedding-3-large"): {"input": 0.13, "output": 0.0},
 }
 
 

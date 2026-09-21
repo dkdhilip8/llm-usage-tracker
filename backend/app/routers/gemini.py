@@ -1,5 +1,5 @@
-"""Gemini-native passthrough: `POST /v1beta/models/{model}:generateContent`
-and `POST /v1beta/models/{model}:streamGenerateContent`.
+"""Gemini-native passthrough: `POST /v1beta/models/{model}:generateContent`,
+`:streamGenerateContent`, `:embedContent`, and `:batchEmbedContents`.
 
 Point the Google GenAI SDK's base_url at this gateway and it works
 unmodified — the SDK's own default path shape is
@@ -45,13 +45,9 @@ router = APIRouter(prefix="/v1beta", tags=["gemini-native"])
 _PROVIDER = "gemini"
 
 
-@router.post("/models/{model}:generateContent")
-def generate_content(
-    model: str,
-    body: dict,
-    vk: VirtualKey = Depends(require_virtual_key),
-    db: Session = Depends(get_db),
-):
+def _authorize(db: Session, vk: VirtualKey, model: str) -> str:
+    """Shared governance preamble for every native Gemini endpoint below.
+    Returns the live API key, or raises the appropriate HTTPException."""
     if not model:
         raise HTTPException(422, "model is required")
     authorize_provider(vk, _PROVIDER)
@@ -59,7 +55,17 @@ def generate_content(
     enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
     enforce_workspace_cap(db, vk, _PROVIDER)
-    api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
+    return require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
+
+
+@router.post("/models/{model}:generateContent")
+def generate_content(
+    model: str,
+    body: dict,
+    vk: VirtualKey = Depends(require_virtual_key),
+    db: Session = Depends(get_db),
+):
+    api_key = _authorize(db, vk, model)
 
     response = run_native_completion(
         db,
@@ -83,14 +89,7 @@ def stream_generate_content(
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
-    if not model:
-        raise HTTPException(422, "model is required")
-    authorize_provider(vk, _PROVIDER)
-    authorize_model(vk, _PROVIDER, model)
-    enforce_workspace_quota(db, vk)
-    enforce_budget(db, vk)
-    enforce_workspace_cap(db, vk, _PROVIDER)
-    api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
+    api_key = _authorize(db, vk, model)
 
     return StreamingResponse(
         stream_native_passthrough(
@@ -106,3 +105,51 @@ def stream_generate_content(
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
     )
+
+
+@router.post("/models/{model}:embedContent")
+def embed_content(
+    model: str,
+    body: dict,
+    vk: VirtualKey = Depends(require_virtual_key),
+    db: Session = Depends(get_db),
+):
+    api_key = _authorize(db, vk, model)
+
+    response = run_native_completion(
+        db,
+        vk,
+        _PROVIDER,
+        model,
+        call_fn=lambda b, k: gemini_adapter.embed_content(model, b, k),
+        extract_usage_fn=gemini_adapter.extract_embed_usage,
+        text_preview_fn=gemini_adapter.embed_preview,
+        prompt_preview=gemini_adapter.embed_prompt_preview(body),
+        api_key=api_key,
+        body=body,
+    )
+    return JSONResponse(response)
+
+
+@router.post("/models/{model}:batchEmbedContents")
+def batch_embed_contents(
+    model: str,
+    body: dict,
+    vk: VirtualKey = Depends(require_virtual_key),
+    db: Session = Depends(get_db),
+):
+    api_key = _authorize(db, vk, model)
+
+    response = run_native_completion(
+        db,
+        vk,
+        _PROVIDER,
+        model,
+        call_fn=lambda b, k: gemini_adapter.batch_embed_contents(model, b, k),
+        extract_usage_fn=gemini_adapter.extract_embed_usage,
+        text_preview_fn=gemini_adapter.embed_preview,
+        prompt_preview=gemini_adapter.batch_embed_prompt_preview(body),
+        api_key=api_key,
+        body=body,
+    )
+    return JSONResponse(response)

@@ -14,6 +14,7 @@ _CHAT_URLS = {
     "openrouter": "https://openrouter.ai/api/v1/chat/completions",
 }
 _RESPONSES_URL = "https://api.openai.com/v1/responses"
+_EMBEDDINGS_URL = "https://api.openai.com/v1/embeddings"
 
 
 def _chat_headers(provider: str, api_key: str) -> dict:
@@ -24,7 +25,7 @@ def _chat_headers(provider: str, api_key: str) -> dict:
     return headers
 
 
-def _responses_headers(api_key: str) -> dict:
+def _bearer_headers(api_key: str) -> dict:
     return {"Authorization": f"Bearer {api_key}", "content-type": "application/json"}
 
 
@@ -103,12 +104,12 @@ class ChatStreamUsageAccumulator:
 # ---- Responses API (openai only) ----
 def call_responses(body: dict, api_key: str) -> dict:
     payload = {k: v for k, v in body.items() if k != "stream"}
-    return providers.send_request(_RESPONSES_URL, _responses_headers(api_key), payload)
+    return providers.send_request(_RESPONSES_URL, _bearer_headers(api_key), payload)
 
 
 def stream_responses(body: dict, api_key: str):
     payload = {**body, "stream": True}
-    yield from providers.stream_request(_RESPONSES_URL, _responses_headers(api_key), payload)
+    yield from providers.stream_request(_RESPONSES_URL, _bearer_headers(api_key), payload)
 
 
 def extract_responses_usage(response: dict) -> UsageInfo:
@@ -157,6 +158,26 @@ class ResponsesStreamUsageAccumulator:
         return UsageInfo(self.prompt_tokens, self.completion_tokens, cost=None, raw=self.raw)
 
 
+# ---- Embeddings (openai only — no streaming) ----
+def call_embeddings(body: dict, api_key: str) -> dict:
+    return providers.send_request(_EMBEDDINGS_URL, _bearer_headers(api_key), body)
+
+
+def extract_embeddings_usage(response: dict) -> UsageInfo:
+    usage = response.get("usage") or {}
+    return UsageInfo(
+        prompt_tokens=int(usage.get("prompt_tokens", 0)),
+        completion_tokens=0,  # embeddings bill input tokens only
+        cost=None,
+        raw={},
+    )
+
+
+def embeddings_preview(response: dict) -> str:
+    n = len(response.get("data") or [])
+    return f"{n} embedding(s)"
+
+
 # ---- shared ----
 def prompt_preview(body: dict) -> str:
     """Human-readable stand-in for usage_logs.prompt_preview (only stored when
@@ -169,4 +190,6 @@ def prompt_preview(body: dict) -> str:
     inp = body.get("input")
     if isinstance(inp, str):
         return inp
+    if isinstance(inp, list) and inp and isinstance(inp[0], str):
+        return " | ".join(inp[:5])
     return ""

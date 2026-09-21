@@ -164,6 +164,29 @@ def mock_provider(monkeypatch):
                 "output": [],
                 "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
             }
+        if url.endswith("/embeddings"):
+            inputs = json_body.get("input")
+            n_inputs = len(inputs) if isinstance(inputs, list) else 1
+            return {
+                "object": "list",
+                "data": [
+                    {"object": "embedding", "embedding": [0.1, 0.2, 0.3], "index": i}
+                    for i in range(n_inputs)
+                ],
+                "model": json_body.get("model"),
+                "usage": {"prompt_tokens": 5 * n_inputs, "total_tokens": 5 * n_inputs},
+            }
+        if ":embedContent" in url:
+            return {
+                "embedding": {"values": [0.1, 0.2, 0.3]},
+                "usageMetadata": {"promptTokenCount": 5},
+            }
+        if ":batchEmbedContents" in url:
+            n_reqs = len(json_body.get("requests") or [])
+            return {
+                "embeddings": [{"values": [0.1, 0.2, 0.3]} for _ in range(n_reqs)],
+                "usageMetadata": {"promptTokenCount": 5 * n_reqs},
+            }
         if "generativelanguage.googleapis.com" in url:
             return {
                 "candidates": [
