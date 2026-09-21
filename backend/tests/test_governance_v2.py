@@ -128,3 +128,107 @@ def test_registered_model_still_estimates_cost(client, make_live_key, mock_provi
     k = make_live_key()
     j = _chat(client, k["key"], model=OR_MODEL).json()  # registered in CONFIGURED_PRICING
     assert j["cost_source"] == "configured" and j["cost"] is not None and j["cost"] >= 0
+
+
+# ---- workspace-owned model pricing registry ----
+def test_upsert_model_pricing_creates_then_updates_in_place(admin_client):
+    body = {"provider": "openai", "model": "my-finetune", "input_per_1m": 1.0, "output_per_1m": 2.0}
+    created = admin_client.put("/api/workspace/pricing", json=body)
+    assert created.status_code == 200
+    row = created.json()
+    assert row["input_per_1m"] == 1.0 and row["output_per_1m"] == 2.0
+
+    updated = admin_client.put(
+        "/api/workspace/pricing",
+        json={**body, "input_per_1m": 5.0, "output_per_1m": 6.0},
+    )
+    assert updated.status_code == 200
+    row2 = updated.json()
+    assert row2["id"] == row["id"]  # same (workspace, provider, model) -> update, not a new row
+    assert row2["input_per_1m"] == 5.0 and row2["output_per_1m"] == 6.0
+
+    listed = admin_client.get("/api/workspace/pricing").json()
+    assert len(listed) == 1 and listed[0]["id"] == row["id"]
+
+
+def test_model_pricing_invalid_provider_422(admin_client):
+    r = admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "not-a-provider", "model": "x", "input_per_1m": 1, "output_per_1m": 1},
+    )
+    assert r.status_code == 422
+
+
+def test_delete_model_pricing(admin_client):
+    row = admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openai", "model": "x", "input_per_1m": 1, "output_per_1m": 1},
+    ).json()
+    assert admin_client.delete(f"/api/workspace/pricing/{row['id']}").status_code == 200
+    assert admin_client.get("/api/workspace/pricing").json() == []
+    assert admin_client.delete(f"/api/workspace/pricing/{row['id']}").status_code == 404
+
+
+def test_delete_model_pricing_cross_workspace_404(admin_client, new_admin):
+    row = admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openai", "model": "x", "input_per_1m": 1, "output_per_1m": 1},
+    ).json()
+    other_admin, _ = new_admin("Other Co")
+    # another workspace's admin cannot see or delete this row — tenant isolation
+    assert row["id"] not in [r["id"] for r in other_admin.get("/api/workspace/pricing").json()]
+    assert other_admin.delete(f"/api/workspace/pricing/{row['id']}").status_code == 404
+    assert admin_client.get("/api/workspace/pricing").json()  # untouched
+
+
+def test_model_pricing_limit_enforced(admin_client, monkeypatch):
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "MAX_MODEL_PRICING_PER_WORKSPACE", 1)
+    admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openai", "model": "a", "input_per_1m": 1, "output_per_1m": 1},
+    )
+    r = admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openai", "model": "b", "input_per_1m": 1, "output_per_1m": 1},
+    )
+    assert r.status_code == 409
+
+
+def test_workspace_pricing_override_used_for_cost(client, admin_client, make_live_key, mock_provider):
+    # unregistered model -> would normally be "unknown"/None
+    model = "totally-custom-finetune"
+    admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openrouter", "model": model, "input_per_1m": 2.0, "output_per_1m": 4.0},
+    )
+    k = make_live_key()
+    j = _chat(client, k["key"], model=model).json()
+    assert j["cost_source"] == "workspace"
+    # mock_provider's fake reply is echoed as prompt tokens/completion tokens by
+    # the legacy call_provider path (5 prompt, 7 completion by convention elsewhere) —
+    # just assert the number is computed from the override rate, not zero/unknown
+    assert j["cost"] is not None and j["cost"] > 0
+    assert j["pricing"]["source"] == "workspace"
+    assert j["pricing"]["input_per_1m"] == 2.0 and j["pricing"]["output_per_1m"] == 4.0
+
+    items = admin_client.get("/api/requests").json()["items"]
+    assert items[0]["cost_source"] == "workspace"
+
+
+def test_workspace_pricing_override_does_not_leak_across_workspaces(client, admin_client, new_admin, make_live_key, mock_provider):
+    model = "totally-custom-finetune-2"
+    admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openrouter", "model": model, "input_per_1m": 2.0, "output_per_1m": 4.0},
+    )
+    other_admin, _ = new_admin("Other Co 2")
+    for p in ("openrouter", "openai", "anthropic", "gemini"):
+        other_admin.put(f"/api/workspace/providers/{p}/key", json={"api_key": f"sk-fake-{p}-000000"})
+    other_key = other_admin.post(
+        "/api/keys", json={"label": "t", "allowed_providers": ["openrouter"], "allow_live": True}
+    ).json()
+
+    j = _chat(client, other_key["key"], model=model).json()
+    assert j["cost_source"] != "workspace"  # the first workspace's override must not apply here

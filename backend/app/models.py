@@ -203,6 +203,38 @@ class ProviderCredential(Base):
     )
 
 
+class ModelPricing(Base):
+    """A workspace's own price override for a (provider, model) pair — lets a
+    Workspace Admin price a newly released or custom model, or correct a
+    built-in estimate, with no code deploy. Takes precedence over the
+    built-in CONFIGURED_PRICING table (and its optional
+    MODEL_PRICING_OVERRIDES_PATH file) for this workspace's own cost
+    calculations only — see gateway.record_usage."""
+
+    __tablename__ = "model_pricing"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "provider", "model", name="uq_model_pricing_ws"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    workspace_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("workspaces.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    input_per_1m: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    output_per_1m: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+
+
 class UsageLog(Base):
     __tablename__ = "usage_logs"
 

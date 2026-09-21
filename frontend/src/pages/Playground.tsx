@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, type ChatResult, type KeyInspect, type ModelInfo } from "../lib/api";
 import { Card } from "../components/Card";
-import { usd } from "../lib/format";
+import { costSourceLabel, usd } from "../lib/format";
 
 const DEFAULT_PROMPT =
   "In two sentences, explain what an LLM gateway does and why usage tracking matters.";
@@ -201,9 +201,7 @@ export function Playground() {
                 <div className="font-semibold tabular-nums">{r.usage.total_tokens}</div>
               </div>
               <div>
-                <div className="text-fg-subtle">
-                  {r.cost_source === "provider" ? "Actual cost" : "Est. cost"}
-                </div>
+                <div className="text-fg-subtle">{costSourceLabel(r.cost_source, true)}</div>
                 <div className="font-semibold tabular-nums">{usd(r.cost)}</div>
               </div>
             </div>

@@ -141,6 +141,26 @@ class ChatResponse(BaseModel):
     response: str
     usage: Usage
     cost: float | None  # None => cost_source "unknown"
-    cost_source: str  # "provider" (real charge) | "configured" (price table) | "unknown"
+    # "provider" (real charge) | "workspace" (this workspace's own price override) |
+    # "configured" (built-in/JSON price table) | "unknown"
+    cost_source: str
     pricing: dict
     latency_ms: int
+
+
+# ---- model pricing registry (workspace-owned price overrides) ----
+class ModelPricingIn(BaseModel):
+    provider: str
+    model: str = Field(min_length=1, max_length=200)
+    input_per_1m: float = Field(ge=0)
+    output_per_1m: float = Field(ge=0)
+
+
+class ModelPricingOut(BaseModel):
+    id: int
+    provider: str
+    model: str
+    input_per_1m: float
+    output_per_1m: float
+    created_at: datetime
+    updated_at: datetime

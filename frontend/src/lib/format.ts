@@ -1,7 +1,24 @@
-export function usd(n: number): string {
+export function usd(n: number | null): string {
+  if (n == null) return "—";
   if (n >= 1) return `$${n.toFixed(2)}`;
   if (n >= 0.01) return `$${n.toFixed(4)}`;
   return `$${n.toFixed(6)}`;
+}
+
+// cost_source: "provider" (real charge) | "workspace" (this workspace's own
+// price override) | "configured" (built-in/JSON price table) | "unknown"
+// (cost is null — an honest gap, never a fabricated number).
+export function costSourceLabel(source: string, long = false): string {
+  switch (source) {
+    case "provider":
+      return long ? "provider actual" : "actual";
+    case "workspace":
+      return long ? "your workspace's price" : "your price";
+    case "configured":
+      return long ? "estimated" : "est";
+    default:
+      return "unknown";
+  }
 }
 
 export function tokens(n: number): string {

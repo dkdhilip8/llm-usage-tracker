@@ -47,6 +47,13 @@ usage and cost on a dashboard. OpenAI · Anthropic · OpenRouter · Google Gemin
 > allow-list (`allowed_models`) — empty means every model of that provider is allowed, the
 > pre-existing default.
 >
+> **Model pricing registry.** A Workspace Admin can price a model their workspace actually uses —
+> a newly released model, a fine-tune, a correction to the built-in estimate — from the Workspace
+> page, no code deploy or JSON-file editing required. It takes precedence over the built-in/JSON
+> price table for that workspace's own cost calculations only (`cost_source: "workspace"`);
+> `gateway.record_usage` is the one place every request path resolves this, so it applies
+> uniformly across every endpoint. See "Model pricing registry" below.
+>
 > **Workspace live mode.** The Workspace Admin attaches the workspace's **own**
 > OpenAI/Anthropic/OpenRouter/Gemini key(s) (encrypted at rest, shown back only as `····last4`),
 > each with its **own monthly spend cap** (`LIVE_CAP_DEFAULT_USD` = $5 until set). The workspace's
@@ -258,6 +265,7 @@ Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 | `INVITE_TTL_DAYS` | `14` | Invite code lifetime. |
 | `MAX_USAGE_ROWS_PER_WORKSPACE` | `20000` | The proxy stops recording once a workspace hits this. |
 | `PLAYGROUND_REQUESTS_PER_HOUR` | `120` | Per-workspace proxy rate limit. |
+| `MAX_MODEL_PRICING_PER_WORKSPACE` | `100` | Cap on a workspace's own model-pricing override entries. |
 | `ALLOW_LIVE_KEYS` | `true` | Let a Workspace Admin attach the workspace's own provider key. |
 | `LIVE_CAP_DEFAULT_USD` | `5` | Default monthly live-spend cap for a provider with no explicit cap. Any non-negative per-provider value, no ceiling. |
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
@@ -290,6 +298,8 @@ membership (`403` if signed in but not in one).
 | GET | `/api/workspace/providers` | admin | `[{provider, configured, source(env\|workspace\|none), last4, monthly_cap_usd, spend_this_month}]` |
 | PUT `\|` DELETE | `/api/workspace/providers/{provider}/key` | admin | attach / clear the workspace's encrypted provider key. `409` if a server env var is set |
 | PATCH | `/api/workspace/providers/{provider}/cap` | admin | `{monthly_cap_usd}` (`null` → the default). `404` unless a key is attached |
+| GET `\|` PUT | `/api/workspace/pricing` | admin | list this workspace's price overrides / upsert one `{provider, model, input_per_1m, output_per_1m}` → `409` past `MAX_MODEL_PRICING_PER_WORKSPACE` |
+| DELETE | `/api/workspace/pricing/{id}` | admin | remove an override — `404` if it isn't this workspace's |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured_via_env}]` — instance-wide env-var status only |
 | POST | `/api/keys` | admin | `{label, allowed_providers[], allow_live?, default_provider?, assigned_user_id?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?, expires_at?, allowed_models?{provider:[model]}}` → raw key once |
 | GET | `/api/keys` | member | admin → every key in the workspace (+ `assigned_username`); member → only keys assigned to them |
@@ -381,11 +391,12 @@ as the next request; the gateway just re-authorizes, re-budgets, and forwards ea
   total_tokens, cost (nullable), cost_source, latency_ms, status, prompt_preview,
   response_preview, usage_raw (jsonb, nullable), ts` (`mode` / `simulated` are legacy columns
   from the retired simulator — always `live` / `false`). Workspace ownership flows through
-  `key_id → virtual_keys.workspace_id`. `cost_source` = `provider` (real charge) | `configured`
-  (tokens × price table) | `unknown` (neither available — `cost` is `NULL`, never a fabricated
-  number; every `SUM(cost)` in the codebase already `coalesce`s, so this is safe). `usage_raw`
-  holds whatever extra usage detail a provider's own response exposed (cached/reasoning tokens,
-  prompt-cache reads/writes, per-modality token counts, ...) verbatim, provider-shaped — see
+  `key_id → virtual_keys.workspace_id`. `cost_source` = `provider` (real charge) | `workspace`
+  (this workspace's own `model_pricing` override) | `configured` (built-in/JSON price table) |
+  `unknown` (none available — `cost` is `NULL`, never a fabricated number; every `SUM(cost)` in
+  the codebase already `coalesce`s, so this is safe). `usage_raw` holds whatever extra usage
+  detail a provider's own response exposed (cached/reasoning tokens, prompt-cache reads/writes,
+  per-modality token counts, ...) verbatim, provider-shaped — see
   `app/adapters/base.py::UsageInfo`. `status` = `success` or `error` (a failed upstream call
   still records a row). Previews are null unless `LOG_BODIES=true`.
 - **provider_credentials** — `(id, workspace_id → workspaces (`ON DELETE CASCADE`), provider,
@@ -395,13 +406,38 @@ as the next request; the gateway just re-authorizes, re-budgets, and forwards ea
   hits `monthly_cap_usd` (NULL ⇒ `LIVE_CAP_DEFAULT_USD`). `ciphertext` is a Fernet
   (AES-128-CBC + HMAC) token; the plaintext is never returned by the API. A server env var for
   the same provider always wins.
+- **model_pricing** — `(id, workspace_id → workspaces (`ON DELETE CASCADE`), provider, model,
+  input_per_1m, output_per_1m, created_at, updated_at)`, unique on `(workspace_id, provider,
+  model)`. A workspace's own price override — see "Model pricing registry" below.
+
+### Model pricing registry
+
+A Workspace Admin manages this from the Workspace page (or `GET`/`PUT`/`DELETE
+/api/workspace/pricing`): price a model the workspace actually uses — newly released, a
+fine-tune, a correction to the built-in estimate — with no code deploy. It's deliberately
+**workspace-scoped, not instance-wide**: this app has no global admin (removed in the v6
+migration; see below), so an instance-wide catalog editable by any Workspace Admin would let one
+tenant silently change cost numbers for every other tenant, breaking the isolation guarantee
+every other piece of workspace config already upholds. `MODEL_PRICING_OVERRIDES_PATH` (a JSON
+file) is unchanged and still instance-wide — that one's set by whoever deploys the instance, not
+through the app.
+
+Precedence, resolved once in `gateway.record_usage` — the single point every request path (native
+adapters + legacy translation, streaming + non-streaming) converges on before writing a
+`usage_logs` row: a real provider-reported charge always wins (`cost_source: "provider"`); else
+this workspace's own `model_pricing` row if one exists (`"workspace"`); else the built-in table
+merged with `MODEL_PRICING_OVERRIDES_PATH` (`"configured"`); else an honest `"unknown"`
+(`cost = NULL`). `record_usage` mutates the `CompletionResult` it's given in place, so a
+client-facing response field read right after (`/v1/proxy/chat`'s `cost`/`pricing` block, the
+legacy `/v1/chat/completions` translation's `x_gateway` envelope) reflects the same number that
+gets persisted.
 
 There is no Alembic. `app/bootstrap.py::_migrate` runs guarded `information_schema` checks +
 `ALTER TABLE`s on boot. The v6 migration adds the workspace tables/columns, moves each existing
 account into a personal workspace as its admin (keys carried over), drops the old global-admin
 account and `virtual_keys.user_id`. v7 adds `virtual_keys.expires_at`, the `allowed_models`
-table, and `usage_logs.usage_raw`/nullable `cost` — all additive and backward compatible with
-every key created before them.
+table, and `usage_logs.usage_raw`/nullable `cost`. v8 adds the `model_pricing` table. All
+additive and backward compatible with every key/row created before them.
 
 ### Adapter architecture
 
@@ -447,8 +483,8 @@ rather than summing deltas. Embeddings never stream (no provider offers it) and 
 
 ## Future improvements
 
-Image / audio APIs, model-registry admin UI (Phase 3 continued) · production-hardening pass —
-reliability, rate limiting, observability, security, cost accuracy, scalability, database
-hardening, CI/CD, production-readiness review · Gemini built-in tools (code execution, Search
-grounding) test coverage · per-model budgets · webhook/Slack alerts · usage-anomaly detection ·
-exact-match response cache · Redis for shared rate-limit / budget counters · SSO / org hierarchy.
+Image / audio APIs (Phase 3 continued) · production-hardening pass — reliability, rate limiting,
+observability, security, cost accuracy, scalability, database hardening, CI/CD,
+production-readiness review · Gemini built-in tools (code execution, Search grounding) test
+coverage · per-model budgets · webhook/Slack alerts · usage-anomaly detection · exact-match
+response cache · Redis for shared rate-limit / budget counters · SSO / org hierarchy.

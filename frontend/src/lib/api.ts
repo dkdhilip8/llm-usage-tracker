@@ -91,6 +91,19 @@ export interface WorkspaceDetail {
 
 export type BudgetPeriod = "day" | "week" | "month" | "custom";
 
+// "workspace" = this workspace's own model_pricing override (see ModelPricingRow)
+export type CostSource = "provider" | "workspace" | "configured" | "unknown";
+
+export interface ModelPricingRow {
+  id: number;
+  provider: string;
+  model: string;
+  input_per_1m: number;
+  output_per_1m: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface KeyRow {
   id: number;
   label: string;
@@ -139,8 +152,8 @@ export interface RequestRow {
   prompt_tokens: number;
   completion_tokens: number;
   total_tokens: number;
-  cost: number;
-  cost_source: "provider" | "configured";
+  cost: number | null;
+  cost_source: CostSource;
   latency_ms: number;
   status: string;
   prompt_preview: string | null;
@@ -203,9 +216,9 @@ export interface ChatResult {
   model: string;
   response: string;
   usage: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-  cost: number;
-  cost_source: "provider" | "configured";
-  pricing: { input_per_1m: number; output_per_1m: number; source: string };
+  cost: number | null;
+  cost_source: CostSource;
+  pricing: { input_per_1m: number | null; output_per_1m: number | null; source: string };
   latency_ms: number;
 }
 
@@ -274,6 +287,21 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ monthly_cap_usd: monthlyCapUsd }),
     }),
+
+  // ---- model pricing registry (workspace-owned price overrides) ----
+  listModelPricing: () => req<ModelPricingRow[]>("/api/workspace/pricing"),
+  upsertModelPricing: (input: {
+    provider: string;
+    model: string;
+    input_per_1m: number;
+    output_per_1m: number;
+  }) =>
+    req<ModelPricingRow>("/api/workspace/pricing", {
+      method: "PUT",
+      body: JSON.stringify(input),
+    }),
+  deleteModelPricing: (id: number) =>
+    req<{ deleted: boolean }>(`/api/workspace/pricing/${id}`, { method: "DELETE" }),
 
   // ---- providers (instance-wide env status; admin) ----
   providers: () => req<ProviderEnvStatus[]>("/api/providers"),

@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     INVITE_TTL_DAYS: int = 14
     MAX_USAGE_ROWS_PER_WORKSPACE: int = 20000  # proxy stops recording past this
     PLAYGROUND_REQUESTS_PER_HOUR: int = 120  # per workspace
+    MAX_MODEL_PRICING_PER_WORKSPACE: int = 100  # workspace-owned price-override entries
 
     # ---- live mode: a workspace attaches its own provider key(s) + a monthly cap per provider ----
     ALLOW_LIVE_KEYS: bool = True
@@ -70,7 +71,7 @@ class Settings(BaseSettings):
     # Off by default — request bodies can contain sensitive data.
     LOG_BODIES: bool = False
 
-    VERSION: str = "0.14.0"
+    VERSION: str = "0.15.0"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":

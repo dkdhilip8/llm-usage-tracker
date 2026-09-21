@@ -75,6 +75,9 @@ ADMIN_ROUTES = [
     ("patch", "/api/workspace", {"name": "Hacked"}),
     ("delete", "/api/workspace", None),
     ("delete", "/api/workspace/members/1", None),
+    ("get", "/api/workspace/pricing", None),
+    ("put", "/api/workspace/pricing", {"provider": "openai", "model": "x", "input_per_1m": 1, "output_per_1m": 1}),
+    ("delete", "/api/workspace/pricing/1", None),
 ]
 
 

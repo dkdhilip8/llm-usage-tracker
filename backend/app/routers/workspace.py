@@ -21,6 +21,7 @@ from app.crypto import encrypt
 from app.db import get_db
 from app.gateway import live_spend_this_month
 from app.models import (
+    ModelPricing,
     ProviderCredential,
     UsageLog,
     User,
@@ -28,6 +29,8 @@ from app.models import (
     Workspace,
     WorkspaceInvite,
 )
+from app.pricing import PROVIDERS
+from app.schemas import ModelPricingIn, ModelPricingOut
 from app.security import require_user
 from app.workspace import (
     ROLE_ADMIN,
@@ -462,3 +465,72 @@ def set_provider_cap(
     row.monthly_cap_usd = body.monthly_cap_usd
     db.commit()
     return _provider_view(db, m.workspace_id)
+
+
+# ---- model pricing registry (admin only) ----
+# A workspace's own price overrides — price a newly released or custom model,
+# or correct a built-in estimate, without a code deploy or hand-editing
+# MODEL_PRICING_OVERRIDES_PATH. Applied in gateway.record_usage, which is the
+# one place every request path (native + legacy, streaming + non-streaming)
+# converges on before writing a usage_logs row.
+@router.get("/pricing", response_model=list[ModelPricingOut])
+def list_model_pricing(
+    db: Session = Depends(get_db), m: Membership = Depends(require_workspace_admin)
+) -> list[ModelPricing]:
+    return list(
+        db.scalars(
+            select(ModelPricing)
+            .where(ModelPricing.workspace_id == m.workspace_id)
+            .order_by(ModelPricing.provider, ModelPricing.model)
+        )
+    )
+
+
+@router.put("/pricing", response_model=ModelPricingOut)
+def upsert_model_pricing(
+    body: ModelPricingIn,
+    db: Session = Depends(get_db),
+    m: Membership = Depends(require_workspace_admin),
+) -> ModelPricing:
+    if body.provider not in PROVIDERS:
+        raise HTTPException(422, f"provider must be one of {PROVIDERS}")
+    row = db.scalar(
+        select(ModelPricing).where(
+            ModelPricing.workspace_id == m.workspace_id,
+            ModelPricing.provider == body.provider,
+            ModelPricing.model == body.model,
+        )
+    )
+    if row is None:
+        count = db.scalar(
+            select(func.count())
+            .select_from(ModelPricing)
+            .where(ModelPricing.workspace_id == m.workspace_id)
+        ) or 0
+        if count >= settings.MAX_MODEL_PRICING_PER_WORKSPACE:
+            raise HTTPException(
+                409,
+                f"pricing entry limit reached ({settings.MAX_MODEL_PRICING_PER_WORKSPACE}) — "
+                "remove one before adding another",
+            )
+        row = ModelPricing(workspace_id=m.workspace_id, provider=body.provider, model=body.model)
+        db.add(row)
+    row.input_per_1m = body.input_per_1m
+    row.output_per_1m = body.output_per_1m
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/pricing/{pricing_id}")
+def delete_model_pricing(
+    pricing_id: int,
+    db: Session = Depends(get_db),
+    m: Membership = Depends(require_workspace_admin),
+) -> dict:
+    row = db.get(ModelPricing, pricing_id)
+    if row is None or row.workspace_id != m.workspace_id:
+        raise HTTPException(404, "pricing entry not found")
+    db.delete(row)
+    db.commit()
+    return {"deleted": True}

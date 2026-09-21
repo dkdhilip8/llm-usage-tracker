@@ -6,6 +6,7 @@ import {
   type BudgetPeriod,
   type KeyCreated,
   type KeyRow,
+  type ModelPricingRow,
   type WorkspaceDetail,
   type WorkspaceProvider,
 } from "../lib/api";
@@ -191,6 +192,189 @@ function ProvidersCard({
             <ProviderRow key={p.provider} p={p} defaultCap={defaultCap} onChange={onChange} />
           ))}
         </ul>
+      </div>
+    </Card>
+  );
+}
+
+// ---------- model pricing registry ----------
+function ModelPricingCard({
+  rows,
+  onChange,
+}: {
+  rows: ModelPricingRow[];
+  onChange: () => void;
+}) {
+  const [provider, setProvider] = useState<string>(PROVIDERS[0]);
+  const [model, setModel] = useState("");
+  const [input, setInput] = useState("");
+  const [output, setOutput] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const run = async (kind: string, fn: () => Promise<unknown>) => {
+    setBusy(kind);
+    setErr(null);
+    try {
+      await fn();
+      onChange();
+    } catch (e) {
+      setErr((e as Error).message);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  function edit(row: ModelPricingRow) {
+    setEditingId(row.id);
+    setProvider(row.provider);
+    setModel(row.model);
+    setInput(String(row.input_per_1m));
+    setOutput(String(row.output_per_1m));
+  }
+
+  function resetForm() {
+    setEditingId(null);
+    setModel("");
+    setInput("");
+    setOutput("");
+  }
+
+  const canSave = model.trim().length > 0 && input.trim() !== "" && output.trim() !== "";
+
+  return (
+    <Card title={`Model pricing (${rows.length})`}>
+      <div className="space-y-3 text-sm">
+        <p className="text-xs text-fg-muted">
+          Price a model your workspace uses — a newly released model, a fine-tune, or a
+          correction to the built-in estimate — with no code deploy. Takes precedence over the
+          built-in price table for this workspace's own cost calculations only.
+        </p>
+
+        {rows.length > 0 && (
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-line text-left text-xs uppercase tracking-wide text-fg-subtle">
+                <th className="py-1.5 pr-3">Provider</th>
+                <th className="py-1.5 pr-3">Model</th>
+                <th className="py-1.5 pr-3 text-right">Input $/1M</th>
+                <th className="py-1.5 pr-3 text-right">Output $/1M</th>
+                <th className="py-1.5 pr-0" />
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r) => (
+                <tr key={r.id} className="border-b border-line last:border-0">
+                  <td className="py-1.5 pr-3 capitalize">{r.provider}</td>
+                  <td className="py-1.5 pr-3 font-mono text-xs">{r.model}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.input_per_1m}</td>
+                  <td className="py-1.5 pr-3 text-right tabular-nums">{r.output_per_1m}</td>
+                  <td className="py-1.5 pr-0 text-right">
+                    <button
+                      className="text-[11px] text-brand-600 hover:underline"
+                      onClick={() => edit(r)}
+                    >
+                      edit
+                    </button>
+                    <button
+                      className="ml-2 text-[11px] text-red-600 hover:underline disabled:opacity-50"
+                      disabled={busy !== null}
+                      onClick={() =>
+                        run("del" + r.id, () => api.deleteModelPricing(r.id))
+                      }
+                    >
+                      remove
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <div className="border-t border-line pt-3">
+          <div className="mb-1 text-xs font-medium uppercase tracking-wide text-fg-muted">
+            {editingId ? "Edit pricing" : "Add pricing"}
+          </div>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs font-medium text-fg-muted">
+              Provider
+              <select
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm disabled:opacity-50"
+                value={provider}
+                disabled={editingId !== null}
+                onChange={(e) => setProvider(e.target.value)}
+              >
+                {PROVIDERS.map((p) => (
+                  <option key={p} value={p}>
+                    {p}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="text-xs font-medium text-fg-muted">
+              Model
+              <input
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm disabled:opacity-50"
+                placeholder="e.g. gpt-4o-mini-ft-abc123"
+                value={model}
+                disabled={editingId !== null}
+                onChange={(e) => setModel(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-fg-muted">
+              Input $ / 1M tokens
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+              />
+            </label>
+            <label className="text-xs font-medium text-fg-muted">
+              Output $ / 1M tokens
+              <input
+                type="number"
+                min="0"
+                step="0.01"
+                className="mt-1 w-full rounded-md border border-line px-2 py-1.5 text-sm"
+                value={output}
+                onChange={(e) => setOutput(e.target.value)}
+              />
+            </label>
+          </div>
+          <div className="mt-2 flex items-center gap-2">
+            <button
+              onClick={() =>
+                run("save", async () => {
+                  await api.upsertModelPricing({
+                    provider,
+                    model: model.trim(),
+                    input_per_1m: Number(input),
+                    output_per_1m: Number(output),
+                  });
+                  resetForm();
+                })
+              }
+              disabled={busy !== null || !canSave}
+              className="rounded-md bg-brand-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-brand-700 disabled:opacity-50"
+            >
+              {editingId ? "Save" : "Add"}
+            </button>
+            {editingId && (
+              <button
+                className="text-xs text-fg-subtle hover:underline"
+                onClick={resetForm}
+              >
+                cancel
+              </button>
+            )}
+          </div>
+        </div>
+        {err && <div className="text-xs text-red-600 dark:text-red-400">{err}</div>}
       </div>
     </Card>
   );
@@ -645,12 +829,14 @@ export function Workspace() {
   const { isWorkspaceAdmin, loading, logout } = useAuth();
   const [ws, setWs] = useState<WorkspaceDetail | null>(null);
   const [keys, setKeys] = useState<KeyRow[]>([]);
+  const [pricing, setPricing] = useState<ModelPricingRow[]>([]);
   const [defaultCap, setDefaultCap] = useState(5);
   const [error, setError] = useState<string | null>(null);
 
   const refresh = useCallback(() => {
     api.getWorkspace().then(setWs).catch((e: Error) => setError(e.message));
     api.listKeys().then(setKeys).catch((e: Error) => setError(e.message));
+    api.listModelPricing().then(setPricing).catch((e: Error) => setError(e.message));
     api.getAccount().then((a) => setDefaultCap(a.live_cap_default_usd)).catch(() => {});
   }, []);
 
@@ -699,6 +885,7 @@ export function Workspace() {
             defaultCap={defaultCap}
             onChange={refresh}
           />
+          <ModelPricingCard rows={pricing} onChange={refresh} />
           {ws && <SettingsCard ws={ws} onChange={refresh} />}
         </div>
         <div className="space-y-4">

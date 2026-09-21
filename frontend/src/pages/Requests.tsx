@@ -8,7 +8,7 @@ import {
   type RequestRow,
 } from "../lib/api";
 import { Card } from "../components/Card";
-import { relTime, usd } from "../lib/format";
+import { costSourceLabel, relTime, usd } from "../lib/format";
 
 const FILTER_KEYS = ["key_id", "provider", "model", "status", "start", "end"] as const;
 
@@ -226,7 +226,7 @@ export function Requests() {
                   <td className="py-2 pr-3 text-right tabular-nums">
                     {usd(r.cost)}
                     <span className="ml-1 text-[10px] text-fg-subtle">
-                      {r.cost_source === "provider" ? "actual" : "est"}
+                      {costSourceLabel(r.cost_source)}
                     </span>
                   </td>
                   <td className="py-2 pr-3 text-right tabular-nums">{r.latency_ms} ms</td>
@@ -284,7 +284,7 @@ export function Requests() {
                 ],
                 [
                   "Cost",
-                  `${usd(open.cost)} (${open.cost_source === "provider" ? "provider actual" : "estimated"})`,
+                  `${usd(open.cost)} (${costSourceLabel(open.cost_source, true)})`,
                 ],
                 ["Latency", `${open.latency_ms} ms`],
                 ["Status", open.status],

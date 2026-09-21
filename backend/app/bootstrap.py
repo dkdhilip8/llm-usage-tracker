@@ -99,6 +99,13 @@ def _migrate(db: Session) -> None:
         db.execute(text("ALTER TABLE usage_logs ALTER COLUMN cost DROP NOT NULL"))
         db.commit()
 
+    # v8: workspace-owned model pricing registry (no-redeploy, per-workspace price overrides).
+    if not _has_table(db, "model_pricing"):
+        from app.models import ModelPricing
+
+        ModelPricing.__table__.create(bind=db.get_bind(), checkfirst=True)
+        db.commit()
+
 
 def _migrate_v6_workspaces(db: Session) -> None:
     """Runs once, guarded by the presence of the old `users.is_admin` column.

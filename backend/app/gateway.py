@@ -22,8 +22,8 @@ from app import providers
 from app.adapters.base import UsageInfo
 from app.config import settings
 from app.db import SessionLocal
-from app.models import ProviderCredential, UsageLog, VirtualKey
-from app.pricing import PROVIDERS, estimate_cost, price_for
+from app.models import ModelPricing, ProviderCredential, UsageLog, VirtualKey
+from app.pricing import PROVIDERS, Pricing, estimate_cost, price_for
 
 # in-process per-workspace Playground rate limiter (best-effort, single instance)
 _pg_hits: dict[int, deque[float]] = defaultdict(deque)
@@ -73,22 +73,28 @@ class CompletionResult:
     prompt_tokens: int
     completion_tokens: int
     cost: float | None  # None => cost_source "unknown" — never a fabricated number
-    cost_source: str  # "provider" (real charge) | "configured" (price table) | "unknown"
+    cost_source: str  # "provider" | "workspace" | "configured" | "unknown" — see record_usage
     latency_ms: int
     usage_raw: dict | None = None  # provider-native extra usage detail, if any
+    # Set by record_usage when a workspace price override applied — lets
+    # pricing_block() (called by callers AFTER record_usage) report the same
+    # price that was actually used, not the built-in table's.
+    price_override: Pricing | None = None
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
 
     def pricing_block(self, provider: str, model: str) -> dict:
-        p = price_for(provider, model)
+        p = self.price_override or price_for(provider, model)
         return {
             "input_per_1m": p["input"] if p else None,
             "output_per_1m": p["output"] if p else None,
             "source": (
                 provider
                 if self.cost_source == "provider"
+                else self.cost_source
+                if self.cost_source == "workspace"
                 else ("configured" if p else "unknown")
             ),
         }
@@ -445,6 +451,19 @@ def _preview(text: str, limit: int = 500) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+def _workspace_price_override(db: Session, workspace_id: int, provider: str, model: str) -> Pricing | None:
+    row = db.scalar(
+        select(ModelPricing).where(
+            ModelPricing.workspace_id == workspace_id,
+            ModelPricing.provider == provider,
+            ModelPricing.model == model,
+        )
+    )
+    if row is None:
+        return None
+    return {"input": float(row.input_per_1m), "output": float(row.output_per_1m)}
+
+
 def record_usage(
     db: Session,
     vk: VirtualKey,
@@ -456,6 +475,23 @@ def record_usage(
     request_id: str | None = None,
     status: str = "success",
 ) -> UsageLog:
+    """Writes the usage_logs row — the one place every code path (native +
+    legacy, streaming + non-streaming) converges before persisting, so it's
+    also the one place a workspace's own model_pricing override gets applied:
+    it takes precedence over the built-in/JSON "configured" table for this
+    workspace's own cost. Mutates result.cost/cost_source/price_override in
+    place so a caller reading them right after this call (a client-facing
+    response field) sees the same final number that gets persisted."""
+    if status == "success" and result.cost_source in ("configured", "unknown"):
+        override = _workspace_price_override(db, vk.workspace_id, provider, model)
+        if override is not None:
+            result.cost = round(
+                result.prompt_tokens / 1_000_000 * override["input"]
+                + result.completion_tokens / 1_000_000 * override["output"],
+                6,
+            )
+            result.cost_source = "workspace"
+            result.price_override = override
     row = UsageLog(
         key_id=vk.id,
         request_id=request_id or str(uuid4()),
