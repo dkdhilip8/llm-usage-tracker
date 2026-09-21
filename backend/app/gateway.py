@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
+import httpx
 from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -24,6 +25,22 @@ from app.config import settings
 from app.db import SessionLocal
 from app.models import ModelPricing, ProviderCredential, UsageLog, VirtualKey
 from app.pricing import PROVIDERS, Pricing, estimate_cost, price_for
+
+
+class UpstreamHTTPError(Exception):
+    """A genuine HTTP error response FROM the provider (4xx/5xx) — as opposed
+    to a transport failure (DNS, timeout, connection refused), which has no
+    real response to relay. Carries the provider's own status code + body so
+    a native passthrough endpoint's error path preserves the same "the raw
+    provider response, untouched" contract its success path already keeps.
+    Handled by a dedicated exception_handler in app.main."""
+
+    def __init__(self, status_code: int, content: bytes, content_type: str | None) -> None:
+        self.status_code = status_code
+        self.content = content
+        self.content_type = content_type
+        super().__init__(f"upstream returned HTTP {status_code}")
+
 
 # in-process per-workspace Playground rate limiter (best-effort, single instance)
 _pg_hits: dict[int, deque[float]] = defaultdict(deque)
@@ -350,7 +367,29 @@ def run_completion(
         text, pt, ct, actual_cost = providers.call_provider(
             provider, model, prompt, api_key=key
         )
+    except httpx.HTTPStatusError as exc:
+        # a genuine error response FROM the provider — real status code, kept
+        # in this endpoint's existing gateway-shaped error envelope (its
+        # response shape has never been a raw passthrough, unlike the native
+        # endpoints, so there's no provider body to relay here — just the
+        # real status instead of a blanket 502).
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        status_code = exc.response.status_code
+        failed = CompletionResult(
+            f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
+        )
+        record_usage(db, vk, provider, model, prompt, failed, status="error")
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "message": f"{provider} returned HTTP {status_code}",
+                "type": "upstream_error",
+                "code": str(status_code),
+            },
+        ) from exc
     except Exception as exc:
+        # a transport failure (DNS, timeout, connection refused, ...) — we
+        # never reached the provider, so 502 (our own failure) is honest.
         latency_ms = int((time.perf_counter() - t0) * 1000)
         failed = CompletionResult(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
@@ -391,7 +430,24 @@ def run_native_completion(
     t0 = time.perf_counter()
     try:
         response = call_fn(body, api_key)
+    except httpx.HTTPStatusError as exc:
+        # a genuine error response FROM the provider — relay it exactly as
+        # returned (same status code, same body) via UpstreamHTTPError, so
+        # the error path keeps the same "raw provider response, untouched"
+        # contract the success path already has. A real SDK pointed at this
+        # gateway sees the same error it would calling the provider directly.
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        status_code = exc.response.status_code
+        failed = CompletionResult(
+            f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
+        )
+        record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        raise UpstreamHTTPError(
+            status_code, exc.response.content, exc.response.headers.get("content-type")
+        ) from exc
     except Exception as exc:
+        # a transport failure (DNS, timeout, connection refused, ...) — we
+        # never reached the provider, so 502 (our own failure) is honest.
         latency_ms = int((time.perf_counter() - t0) * 1000)
         failed = CompletionResult(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
@@ -429,7 +485,16 @@ def stream_native_passthrough(
     `stream_fn` verbatim (byte-for-byte SSE passthrough, no buffering) while an
     accumulator extracts usage as it goes; records usage once the stream ends
     (success or mid-stream failure) via record_usage_detached, exactly like the
-    legacy streaming path does."""
+    legacy streaming path does.
+
+    Unlike the non-streaming path, a failure here can't change the HTTP status
+    — by the time any exception from `stream_fn` surfaces, the 200 and SSE
+    headers are already on the wire (StreamingResponse sends them before
+    pulling the first chunk). The one thing still worth doing: when the
+    failure is a genuine error response FROM the provider (not a transport
+    failure), say so in-band with the real status code, so a client reading
+    the stream can still tell "the provider rejected this" from "the gateway
+    couldn't reach it" even though the outer status is unavoidably 200."""
     t0 = time.perf_counter()
     status = "success"
     acc = accumulator_cls()
@@ -437,6 +502,19 @@ def stream_native_passthrough(
         for line in stream_fn(body, api_key):
             acc.feed(line)
             yield (line + "\n") if line else "\n"
+    except httpx.HTTPStatusError as exc:
+        status = "error"
+        status_code = exc.response.status_code
+        note = json.dumps(
+            {
+                "type": "error",
+                "error": {
+                    "message": f"{provider} call failed: HTTP {status_code}",
+                    "upstream_status": status_code,
+                },
+            }
+        )
+        yield f"event: error\ndata: {note}\n\n"
     except Exception as exc:  # noqa: BLE001 — headers are already sent; surface in-band
         status = "error"
         note = json.dumps({"type": "error", "error": {"message": f"{provider} call failed: {exc}"}})

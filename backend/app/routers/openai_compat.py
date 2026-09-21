@@ -30,6 +30,7 @@ import time
 from collections.abc import Iterator
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
@@ -231,6 +232,14 @@ def chat_completions(
                         else {"content": token}
                     )
                     yield _chunk(cid, created, model_str, delta)
+        except httpx.HTTPStatusError as exc:
+            # a genuine error response FROM the provider — real status code in
+            # the message (the outer HTTP status is unavoidably already 200;
+            # see gateway.stream_native_passthrough's docstring for why).
+            status = "error"
+            note = f"[{provider} call failed: HTTP {exc.response.status_code}]"
+            acc.append(note)
+            yield _chunk(cid, created, model_str, {"role": "assistant", "content": note})
         except Exception as exc:  # noqa: BLE001
             status = "error"
             note = f"[{provider} call failed: {exc}]"

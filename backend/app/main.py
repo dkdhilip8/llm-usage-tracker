@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
@@ -10,6 +10,7 @@ from starlette.types import Scope
 from app import providers
 from app.config import settings
 from app.db import Base, SessionLocal, engine
+from app.gateway import UpstreamHTTPError
 from app.routers import (
     account,
     auth,
@@ -74,6 +75,18 @@ if settings.cors_origins_list:
 @app.get("/healthz")
 def healthz() -> dict:
     return {"status": "ok", "version": settings.VERSION}
+
+
+@app.exception_handler(UpstreamHTTPError)
+async def upstream_http_error_handler(_: Request, exc: UpstreamHTTPError) -> Response:
+    """A native passthrough endpoint's real provider error — relayed with the
+    provider's own status code and body, untouched, matching the success
+    path's "raw provider response" contract. See UpstreamHTTPError."""
+    return Response(
+        content=exc.content,
+        status_code=exc.status_code,
+        media_type=exc.content_type or "application/json",
+    )
 
 
 app.include_router(auth.router)

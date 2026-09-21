@@ -232,3 +232,36 @@ def test_workspace_pricing_override_does_not_leak_across_workspaces(client, admi
 
     j = _chat(client, other_key["key"], model=model).json()
     assert j["cost_source"] != "workspace"  # the first workspace's override must not apply here
+
+
+def test_workspace_pricing_override_never_supersedes_a_real_provider_cost(client, admin_client, make_live_key, monkeypatch):
+    """M8: record_usage only applies a workspace override when cost_source is
+    "configured"/"unknown" (gateway.py) — a real provider-reported charge
+    (cost_source "provider") must win even when an override also exists for
+    that exact (provider, model). This proves it, using a model that's BOTH
+    registered in CONFIGURED_PRICING and has a workspace override set, so a
+    regression (the override winning) would be unambiguous."""
+    model = "meta-llama/llama-3.3-70b-instruct"  # registered in CONFIGURED_PRICING too
+    real_provider_cost = 0.123456  # distinct from both the override and the configured-table price
+
+    def fake_call_provider(provider, model, prompt, api_key=None):
+        return (f"reply to: {prompt}", 5, 7, real_provider_cost)
+
+    monkeypatch.setattr("app.providers.call_provider", fake_call_provider)
+
+    admin_client.put(
+        "/api/workspace/pricing",
+        json={"provider": "openrouter", "model": model, "input_per_1m": 999.0, "output_per_1m": 999.0},
+    )
+    k = make_live_key()
+    j = _chat(client, k["key"], model=model).json()
+
+    assert j["cost_source"] == "provider"
+    assert j["cost"] == round(real_provider_cost, 6)  # the real charge, untouched by the override
+    assert j["pricing"]["source"] == "openrouter"  # the provider's own name, not "workspace"
+    # the override's rate (999.0) never got picked up for the pricing display either
+    assert j["pricing"]["input_per_1m"] == 0.10 and j["pricing"]["output_per_1m"] == 0.32
+
+    items = admin_client.get("/api/requests").json()["items"]
+    assert items[0]["cost_source"] == "provider"
+    assert items[0]["cost"] == round(real_provider_cost, 6)

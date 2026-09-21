@@ -64,9 +64,17 @@ def stream_request(
     as httpx reassembles them from the chunked transfer — this is line-oriented
     because SSE itself is line-oriented (`event: ...` / `data: ...` / blank
     separators), so re-emitting each line reconstructs a spec-compliant stream
-    without buffering the whole response first."""
+    without buffering the whole response first.
+
+    On a real HTTP error status, the (usually short, JSON) error body is read
+    before `raise_for_status()` — a streaming response's body isn't available
+    on the exception otherwise, and the connection closes with the `with`
+    block. Callers that want the provider's real status+body (not just a
+    generic failure) read it off `exc.response`."""
     with httpx.Client(timeout=timeout) as client:
         with client.stream("POST", url, headers=headers, json=json_body) as r:
+            if r.is_error:
+                r.read()
             r.raise_for_status()
             yield from r.iter_lines()
 
