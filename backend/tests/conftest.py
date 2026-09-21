@@ -5,6 +5,7 @@ CI:     the workflow starts a postgres service and sets the same var.
 The test database is created if missing and its schema is dropped/recreated per session.
 """
 
+import json
 import os
 
 # Force test values — override anything the container/.env already set.
@@ -95,12 +96,38 @@ def _no_network(monkeypatch):
     )
 
 
+def _last_text(json_body: dict) -> str:
+    """Best-effort echo text for a canned response, regardless of request shape."""
+    messages = json_body.get("messages")
+    if isinstance(messages, list) and messages:
+        content = messages[-1].get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "text":
+                    return block.get("text", "")
+    inp = json_body.get("input")
+    if isinstance(inp, str):
+        return inp
+    return ""
+
+
 @pytest.fixture()
 def mock_provider(monkeypatch):
-    """Stub the upstream completion + stream. Returns the list of recorded calls.
-    By default cost is unreported (=> cost_source 'configured'); pass
-    `mock_provider.cost = 0.002` style via the returned object is not supported —
-    use monkeypatch directly for the provider-cost path."""
+    """Stub every outbound provider call — both the legacy call_provider /
+    stream_openai_compatible functions (used by /v1/proxy/chat and the
+    anthropic/gemini legacy path of /v1/chat/completions) AND the lower-level
+    app.providers.send_request / stream_request seam (used by the new
+    adapters: /v1/messages, /v1/responses, and the openai/openrouter
+    full-fidelity path of /v1/chat/completions). Returns the list of recorded
+    calls — legacy calls append (provider, model, prompt, api_key) tuples,
+    adapter calls append (url, headers, json_body) tuples; no single test
+    exercises both shapes, so calls[0] is unambiguous per test.
+
+    By default cost is unreported (=> cost_source 'configured'/'unknown');
+    monkeypatch app.providers.send_request/stream_request directly for a
+    provider-cost variant."""
     calls: list[tuple] = []
 
     def fake_call(provider, model, prompt, api_key=None):
@@ -113,8 +140,108 @@ def mock_provider(monkeypatch):
         yield ("delta", "world")
         yield ("done", {"prompt_tokens": 5, "completion_tokens": 7, "cost": None})
 
+    def fake_send(url, headers, json_body, *, timeout=60.0):
+        calls.append((url, headers, json_body))
+        text = f"reply to: {_last_text(json_body)}"
+        n = len(calls)  # every real provider response has a unique id; so must ours
+        if "anthropic.com" in url:
+            return {
+                "id": f"msg_test_{n}",
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "text", "text": text}],
+                "model": json_body.get("model"),
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 7},
+            }
+        if url.endswith("/responses"):
+            return {
+                "id": f"resp_test_{n}",
+                "object": "response",
+                "status": "completed",
+                "model": json_body.get("model"),
+                "output_text": text,
+                "output": [],
+                "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+            }
+        return {
+            "id": f"chatcmpl_test_{n}",
+            "object": "chat.completion",
+            "created": 1700000000,
+            "model": json_body.get("model"),
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": text},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12},
+        }
+
+    def fake_stream_request(url, headers, json_body, *, timeout=60.0):
+        calls.append((url, headers, json_body))
+        if "anthropic.com" in url:
+            yield "event: message_start"
+            yield 'data: {"type":"message_start","message":{"usage":{"input_tokens":5}}}'
+            yield ""
+            yield "event: content_block_delta"
+            yield (
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"hello "}}'
+            )
+            yield ""
+            yield "event: content_block_delta"
+            yield (
+                'data: {"type":"content_block_delta","index":0,'
+                '"delta":{"type":"text_delta","text":"world"}}'
+            )
+            yield ""
+            yield "event: message_delta"
+            yield 'data: {"type":"message_delta","usage":{"output_tokens":7}}'
+            yield ""
+            yield "event: message_stop"
+            yield 'data: {"type":"message_stop"}'
+        elif url.endswith("/responses"):
+            yield 'data: {"type":"response.output_text.delta","delta":"hello "}'
+            yield ""
+            yield 'data: {"type":"response.output_text.delta","delta":"world"}'
+            yield ""
+            yield (
+                'data: {"type":"response.completed","response":'
+                '{"usage":{"input_tokens":5,"output_tokens":7}}}'
+            )
+            yield ""
+            yield "data: [DONE]"
+        else:
+            base = {
+                "id": "chatcmpl_test",
+                "object": "chat.completion.chunk",
+                "created": 1700000000,
+                "model": json_body.get("model"),
+            }
+            yield "data: " + json.dumps(
+                {**base, "choices": [{"index": 0, "delta": {"role": "assistant", "content": "hello "}, "finish_reason": None}]}
+            )
+            yield ""
+            yield "data: " + json.dumps(
+                {**base, "choices": [{"index": 0, "delta": {"content": "world"}, "finish_reason": None}]}
+            )
+            yield ""
+            yield "data: " + json.dumps(
+                {
+                    **base,
+                    "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": 5, "completion_tokens": 7, "total_tokens": 12, "cost": None},
+                }
+            )
+            yield ""
+            yield "data: [DONE]"
+
     monkeypatch.setattr("app.providers.call_provider", fake_call)
     monkeypatch.setattr("app.providers.stream_openai_compatible", fake_stream)
+    monkeypatch.setattr("app.providers.send_request", fake_send)
+    monkeypatch.setattr("app.providers.stream_request", fake_stream_request)
     return calls
 
 

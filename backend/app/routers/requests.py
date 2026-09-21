@@ -71,7 +71,7 @@ def list_requests(
             "prompt_tokens": u.prompt_tokens,
             "completion_tokens": u.completion_tokens,
             "total_tokens": u.total_tokens,
-            "cost": float(u.cost),
+            "cost": float(u.cost) if u.cost is not None else None,
             "cost_source": u.cost_source,
             "latency_ms": u.latency_ms,
             "status": u.status,

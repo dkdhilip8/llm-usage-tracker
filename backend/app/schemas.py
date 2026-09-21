@@ -7,6 +7,12 @@ BudgetPeriod = Literal["day", "week", "month", "custom"]
 
 
 # ---- keys ----
+# {provider: [model, ...]} — restricts that provider to an explicit model
+# allow-list on the key. A provider absent from this dict keeps its default
+# "every model allowed" behavior.
+AllowedModelsIn = dict[str, list[str]]
+
+
 class KeyCreate(BaseModel):
     label: str = Field(min_length=1, max_length=120)
     allowed_providers: list[str] = Field(min_length=1)
@@ -17,6 +23,8 @@ class KeyCreate(BaseModel):
     budget_period: BudgetPeriod = "month"
     budget_start: date | None = None  # required when budget_period == "custom"
     budget_end: date | None = None  # inclusive end date
+    expires_at: datetime | None = None  # null = never expires
+    allowed_models: AllowedModelsIn | None = None
 
 
 class KeyUpdate(BaseModel):
@@ -29,6 +37,10 @@ class KeyUpdate(BaseModel):
     budget_start: date | None = None
     budget_end: date | None = None
     clear_budget: bool = False
+    expires_at: datetime | None = None
+    clear_expiry: bool = False
+    allowed_models: AllowedModelsIn | None = None
+    clear_allowed_models: bool = False
 
 
 class KeyCreated(BaseModel):
@@ -43,6 +55,7 @@ class KeyCreated(BaseModel):
     budget_period: str
     budget_start: datetime | None
     budget_end: datetime | None
+    expires_at: datetime | None
     created_at: datetime
 
 
@@ -58,6 +71,7 @@ class KeyOut(BaseModel):
     budget_period: str
     budget_start: datetime | None
     budget_end: datetime | None
+    expires_at: datetime | None
     spend_period: float
     created_at: datetime
     last_used_at: datetime | None
@@ -126,7 +140,7 @@ class ChatResponse(BaseModel):
     model: str
     response: str
     usage: Usage
-    cost: float
-    cost_source: str  # "provider" (real charge) | "configured" (tokens x price table)
+    cost: float | None  # None => cost_source "unknown"
+    cost_source: str  # "provider" (real charge) | "configured" (price table) | "unknown"
     pricing: dict
     latency_ms: int

@@ -125,11 +125,32 @@ def test_budget_patch_clears(client, admin_client, make_live_key, mock_provider)
 
 
 def test_openai_compat_shape(client, make_live_key, mock_provider):
+    # openai/openrouter now go through the full-fidelity native adapter — the
+    # client gets the real provider response back, untouched (no gateway envelope).
     k = make_live_key(allowed_providers=["openrouter"], default_provider="openrouter")
     j = client.post(
         "/v1/chat/completions",
         json={
             "model": f"openrouter/{OR_MODEL}",
+            "messages": [{"role": "user", "content": "hi"}],
+        },
+        headers=_bearer(k["key"]),
+    ).json()
+    assert j["object"] == "chat.completion"
+    assert j["choices"][0]["message"]["role"] == "assistant"
+    assert set(j["usage"]) == {"prompt_tokens", "completion_tokens", "total_tokens"}
+    # forwarded to OpenRouter with the "openrouter/" prefix stripped
+    assert mock_provider[0][2]["model"] == OR_MODEL
+
+
+def test_openai_compat_legacy_translation_still_works(client, make_live_key, mock_provider):
+    # anthropic/gemini stay on the pre-Phase-1 cross-provider translation path
+    # (flattened prompt, gateway-fabricated envelope) for backward compatibility.
+    k = make_live_key(allowed_providers=["gemini"], default_provider="gemini")
+    j = client.post(
+        "/v1/chat/completions",
+        json={
+            "model": "gemini/gemini-2.5-flash",
             "messages": [{"role": "user", "content": "hi"}],
         },
         headers=_bearer(k["key"]),

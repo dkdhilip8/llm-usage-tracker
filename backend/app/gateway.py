@@ -6,8 +6,10 @@ target resolution + provider ACL, budget + workspace-cap enforcement, the real
 upstream call, and the usage-log write. There is no simulator — a request either
 hits a real provider or returns an error."""
 
+import json
 import time
 from collections import defaultdict, deque
+from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -17,6 +19,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app import providers
+from app.adapters.base import UsageInfo
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ProviderCredential, UsageLog, VirtualKey
@@ -69,9 +72,10 @@ class CompletionResult:
     text: str
     prompt_tokens: int
     completion_tokens: int
-    cost: float
-    cost_source: str  # "provider" (real charge) | "configured" (tokens x price table)
+    cost: float | None  # None => cost_source "unknown" — never a fabricated number
+    cost_source: str  # "provider" (real charge) | "configured" (price table) | "unknown"
     latency_ms: int
+    usage_raw: dict | None = None  # provider-native extra usage detail, if any
 
     @property
     def total_tokens(self) -> int:
@@ -80,9 +84,13 @@ class CompletionResult:
     def pricing_block(self, provider: str, model: str) -> dict:
         p = price_for(provider, model)
         return {
-            "input_per_1m": p["input"],
-            "output_per_1m": p["output"],
-            "source": provider if self.cost_source == "provider" else "configured",
+            "input_per_1m": p["input"] if p else None,
+            "output_per_1m": p["output"] if p else None,
+            "source": (
+                provider
+                if self.cost_source == "provider"
+                else ("configured" if p else "unknown")
+            ),
         }
 
 
@@ -92,6 +100,22 @@ def authorize_provider(vk: VirtualKey, provider: str) -> None:
     if provider not in vk.provider_names():
         raise HTTPException(
             403, f"this key is not permitted to use provider '{provider}'"
+        )
+
+
+def authorize_model(vk: VirtualKey, provider: str, model: str) -> None:
+    """Per-model allow-list, if the key has one for this provider. A key with
+    zero allowed_models rows for (provider) permits every model of it — the
+    default, unchanged from every key created before this existed."""
+    allowed = vk.models_for(provider)
+    if allowed and model not in allowed:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": f"this key is not permitted to use model '{model}' on {provider}",
+                "type": "model_not_allowed",
+                "code": "403",
+            },
         )
 
 
@@ -113,6 +137,7 @@ def resolve_target(vk: VirtualKey, model_str: str) -> tuple[str, str]:
             "llama-3.3-70b-instruct') or the key needs a default_provider",
         )
     authorize_provider(vk, provider)
+    authorize_model(vk, provider, model)
     return provider, model
 
 
@@ -285,6 +310,31 @@ def require_live_ready(db: Session, vk: VirtualKey, provider: str) -> str:
     return key
 
 
+def _cost_and_source(actual_cost: float | None, provider: str, model: str, pt: int, ct: int) -> tuple[float | None, str]:
+    if actual_cost is not None:
+        return round(actual_cost, 6), "provider"
+    est = estimate_cost(provider, model, pt, ct)
+    return (est, "configured") if est is not None else (None, "unknown")
+
+
+def completion_result_from_usage(
+    usage: UsageInfo, provider: str, model: str, latency_ms: int, *, text: str = ""
+) -> CompletionResult:
+    """Turn an adapter's UsageInfo (pulled from a real provider response) into
+    the CompletionResult record_usage expects, applying the same
+    provider-cost-wins-else-honest-estimate rule as the legacy call_provider path."""
+    cost, cost_source = _cost_and_source(usage.cost, provider, model, usage.prompt_tokens, usage.completion_tokens)
+    return CompletionResult(
+        text=text,
+        prompt_tokens=usage.prompt_tokens,
+        completion_tokens=usage.completion_tokens,
+        cost=cost,
+        cost_source=cost_source,
+        latency_ms=latency_ms,
+        usage_raw=usage.raw or None,
+    )
+
+
 def run_completion(
     db: Session, vk: VirtualKey, provider: str, model: str, prompt: str
 ) -> CompletionResult:
@@ -309,13 +359,85 @@ def run_completion(
             },
         ) from exc
     latency_ms = int((time.perf_counter() - t0) * 1000)
-
-    if actual_cost is not None:
-        cost, cost_source = round(actual_cost, 6), "provider"
-    else:
-        cost, cost_source = estimate_cost(provider, model, pt, ct), "configured"
+    cost, cost_source = _cost_and_source(actual_cost, provider, model, pt, ct)
 
     return CompletionResult(text, pt, ct, cost, cost_source, latency_ms)
+
+
+def run_native_completion(
+    db: Session,
+    vk: VirtualKey,
+    provider: str,
+    model: str,
+    *,
+    call_fn: Callable[[dict, str], dict],
+    extract_usage_fn: Callable[[dict], UsageInfo],
+    text_preview_fn: Callable[[dict], str],
+    prompt_preview: str,
+    api_key: str,
+    body: dict,
+) -> dict:
+    """For the provider-native passthrough endpoints (/v1/messages,
+    /v1/responses, and the full-fidelity branch of /v1/chat/completions):
+    calls `call_fn(body, api_key)`, records usage exactly like run_completion
+    does (including on failure), and returns the RAW provider response —
+    unlike run_completion, the caller returns this untouched to the client."""
+    t0 = time.perf_counter()
+    try:
+        response = call_fn(body, api_key)
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        failed = CompletionResult(
+            f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
+        )
+        record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"{provider} call failed: {exc}",
+                "type": "upstream_error",
+                "code": "502",
+            },
+        ) from exc
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    usage = extract_usage_fn(response)
+    result = completion_result_from_usage(
+        usage, provider, model, latency_ms, text=text_preview_fn(response)
+    )
+    record_usage(db, vk, provider, model, prompt_preview, result, request_id=response.get("id"))
+    return response
+
+
+def stream_native_passthrough(
+    vk_id: int,
+    provider: str,
+    model: str,
+    prompt_preview: str,
+    *,
+    stream_fn: Callable[[dict, str], Iterator[str]],
+    accumulator_cls: type,
+    api_key: str,
+    body: dict,
+) -> Iterator[str]:
+    """For the provider-native streaming endpoints: re-emits every line from
+    `stream_fn` verbatim (byte-for-byte SSE passthrough, no buffering) while an
+    accumulator extracts usage as it goes; records usage once the stream ends
+    (success or mid-stream failure) via record_usage_detached, exactly like the
+    legacy streaming path does."""
+    t0 = time.perf_counter()
+    status = "success"
+    acc = accumulator_cls()
+    try:
+        for line in stream_fn(body, api_key):
+            acc.feed(line)
+            yield (line + "\n") if line else "\n"
+    except Exception as exc:  # noqa: BLE001 — headers are already sent; surface in-band
+        status = "error"
+        note = json.dumps({"type": "error", "error": {"message": f"{provider} call failed: {exc}"}})
+        yield f"event: error\ndata: {note}\n\n"
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    result = completion_result_from_usage(acc.usage(), provider, model, latency_ms)
+    record_usage_detached(vk_id, provider, model, prompt_preview, result, status=status)
 
 
 def _preview(text: str, limit: int = 500) -> str:
@@ -344,6 +466,7 @@ def record_usage(
         total_tokens=result.total_tokens,
         cost=result.cost,
         cost_source=result.cost_source,
+        usage_raw=result.usage_raw,
         simulated=False,
         mode="live",
         latency_ms=result.latency_ms,

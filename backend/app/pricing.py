@@ -1,6 +1,16 @@
-"""Configured token pricing — a hand-maintained fallback price table used to
-estimate cost when the provider doesn't report one. Editable in one place,
-surfaced read-only at GET /api/models. USD per 1,000,000 tokens."""
+"""Configured token pricing — a hand-maintained price table used to estimate
+cost when the provider doesn't report one. Editable in one place, surfaced
+read-only at GET /api/models, and extensible at runtime via
+MODEL_PRICING_OVERRIDES_PATH (a JSON file of extra entries merged on top at
+import time) so a newly released model can be priced without a code deploy.
+USD per 1,000,000 tokens.
+
+When a (provider, model) pair isn't registered anywhere, `estimate_cost`
+returns None rather than guessing — record that gap honestly
+(cost_source="unknown") instead of inventing a number."""
+
+import json
+import os
 
 Pricing = dict[str, float]
 
@@ -25,19 +35,48 @@ CONFIGURED_PRICING: dict[tuple[str, str], Pricing] = {
     ("gemini", "gemini-2.5-pro"): {"input": 1.25, "output": 10.00},
 }
 
-FALLBACK_PRICING: Pricing = {"input": 1.00, "output": 3.00}
+
+def _load_overrides() -> dict[tuple[str, str], Pricing]:
+    """Optional extra (provider, model) -> {input, output} entries from a JSON
+    file (a list of {"provider", "model", "input", "output"} objects), so an
+    operator can price a newly released model without a code deploy. A missing
+    or malformed file is silently ignored — it must never break startup."""
+    path = os.environ.get("MODEL_PRICING_OVERRIDES_PATH", "").strip()
+    if not path or not os.path.isfile(path):
+        return {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            raw = json.load(f)
+        return {
+            (entry["provider"], entry["model"]): {
+                "input": float(entry["input"]),
+                "output": float(entry["output"]),
+            }
+            for entry in raw
+        }
+    except Exception:
+        return {}
+
+
+CONFIGURED_PRICING.update(_load_overrides())
 
 PROVIDERS = ("openai", "anthropic", "openrouter", "gemini")
 
 
-def price_for(provider: str, model: str) -> Pricing:
-    return CONFIGURED_PRICING.get((provider, model), FALLBACK_PRICING)
+def price_for(provider: str, model: str) -> Pricing | None:
+    """None => this (provider, model) isn't registered. Callers must not guess."""
+    return CONFIGURED_PRICING.get((provider, model))
 
 
 def estimate_cost(
     provider: str, model: str, prompt_tokens: int, completion_tokens: int
-) -> float:
+) -> float | None:
+    """None => the model isn't registered and the provider didn't report a real
+    charge either; the caller records cost_source="unknown" rather than a
+    fabricated number."""
     p = price_for(provider, model)
+    if p is None:
+        return None
     cost = prompt_tokens / 1_000_000 * p["input"] + completion_tokens / 1_000_000 * p["output"]
     return round(cost, 6)
 

@@ -18,8 +18,27 @@ usage and cost on a dashboard. OpenAI · Anthropic · OpenRouter · Google Gemin
 >   No request log, no Playground, no member list, no provider config, no other members' data.
 >
 > **Real calls only — no simulator.** Every proxied request hits a real provider. A virtual key
-> that is paused (`403`), whose workspace has no key for the target provider (`402`), or whose
-> upstream call fails (`502`) returns an error — never a fake response.
+> that is paused (`403`), whose workspace has no key for the target provider (`402`), whose
+> provider/model isn't on its allow-list (`403`), or whose upstream call fails (`502`) returns an
+> error — never a fake response.
+>
+> **Provider-native passthrough.** Alongside the OpenAI-compatible `/v1/chat/completions`, the
+> gateway exposes each provider's own API shape almost verbatim — `/v1/messages` (Anthropic
+> Messages: system prompt, content blocks, tool use, prompt caching) and `/v1/responses` (OpenAI
+> Responses API). Point the real `openai`/`anthropic` SDK's `base_url` at the gateway and it works
+> unmodified: multi-turn history, tools/function-calling, structured outputs, and multimodal
+> content parts all ride through untouched — the gateway validates only `model` and never
+> reconstructs the request field-by-field. Tool/function calls are **proxied, not executed** — an
+> agent framework (LangGraph, LangChain, ...) still runs its own tools and sends the result back as
+> the next call. `openai`/`openrouter` also get this full-fidelity treatment on
+> `/v1/chat/completions` itself; `anthropic`/`gemini` keep the original flattened-prompt
+> translation there for backward compatibility.
+>
+> **Per-key expiry and per-model allow-list**, alongside the existing per-provider ACL: a key can
+> carry an `expires_at` (checked the same way as `revoked_at` — an expired key gets the same
+> generic `401` as a nonexistent one, no state leak) and, per provider, an explicit model
+> allow-list (`allowed_models`) — empty means every model of that provider is allowed, the
+> pre-existing default.
 >
 > **Workspace live mode.** The Workspace Admin attaches the workspace's **own**
 > OpenAI/Anthropic/OpenRouter/Gemini key(s) (encrypted at rest, shown back only as `····last4`),
@@ -36,17 +55,23 @@ usage and cost on a dashboard. OpenAI · Anthropic · OpenRouter · Google Gemin
 >
 > **Cost**: for **OpenRouter** calls it's the provider's *actual* charge (`usage.cost`).
 > OpenAI/Anthropic/Gemini don't return a per-request cost, so those are **estimated** as
-> tokens × a hand-maintained price table. Each row records which: `cost_source` = `provider`
-> or `configured`.
+> tokens × a hand-maintained price table (extensible at runtime via `MODEL_PRICING_OVERRIDES_PATH`
+> — no code deploy needed for a newly released model). When a model isn't registered *and* the
+> provider reports no charge, the row is honestly `cost_source = "unknown"` (`cost = NULL`) —
+> never a guessed number. Each row also keeps whatever extra usage detail the provider exposed
+> (cached/reasoning tokens, prompt-cache reads/writes, ...) verbatim in `usage_raw`.
 
 ```
 Browser → React (Dashboard — all; Requests · Playground · Workspace — admin only)
+   or a real OpenAI / Anthropic SDK, or LangChain/LangGraph, pointed at the gateway
         → FastAPI gateway
             → session + workspace membership  →  role (admin | member)
-            → virtual-key auth  →  per-key provider ACL  →  per-key budget  →  workspace cap
-            → real provider call   [JSON or SSE stream]   (402 / 403 / 502 on failure)
-        → PostgreSQL (workspaces, workspace_invites, users, virtual_keys,
-                      allowed_providers, provider_credentials, usage_logs)
+            → virtual-key auth (+ expiry)  →  per-key provider + model ACL
+            → per-key budget  →  workspace cap
+            → real provider call, almost-verbatim passthrough   [JSON or SSE stream]
+              (402 / 403 / 502 on failure)
+        → PostgreSQL (workspaces, workspace_invites, users, virtual_keys, allowed_providers,
+                      allowed_models, provider_credentials, usage_logs)
         → dashboard aggregates + request log, scoped to the workspace (member: to assigned keys)
 ```
 
@@ -210,6 +235,7 @@ Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` | `""` | Instance-wide provider creds — configure a provider for every workspace. Always win over a workspace's attached key. Never shown in the UI. With none set, a request `402`s until its workspace attaches a key. Gemini uses Google's OpenAI-compatible endpoint. |
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
 | `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the Requests tab. Off by default — bodies can be sensitive. |
+| `MODEL_PRICING_OVERRIDES_PATH` | `""` | Optional path to a JSON file of extra `{provider, model, input, output}` price entries, merged over the built-in table at startup — price a newly released model without a code deploy. A missing/malformed file is silently ignored. |
 
 ---
 
@@ -236,17 +262,45 @@ membership (`403` if signed in but not in one).
 | PUT `\|` DELETE | `/api/workspace/providers/{provider}/key` | admin | attach / clear the workspace's encrypted provider key. `409` if a server env var is set |
 | PATCH | `/api/workspace/providers/{provider}/cap` | admin | `{monthly_cap_usd}` (`null` → the default). `404` unless a key is attached |
 | GET | `/api/providers` | admin | `[{provider, env_var, configured_via_env}]` — instance-wide env-var status only |
-| POST | `/api/keys` | admin | `{label, allowed_providers[], allow_live?, default_provider?, assigned_user_id?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?}` → raw key once |
+| POST | `/api/keys` | admin | `{label, allowed_providers[], allow_live?, default_provider?, assigned_user_id?, monthly_budget_usd?, budget_period?(day\|week\|month\|custom), budget_start?, budget_end?, expires_at?, allowed_models?{provider:[model]}}` → raw key once |
 | GET | `/api/keys` | member | admin → every key in the workspace (+ `assigned_username`); member → only keys assigned to them |
 | PATCH `\|` DELETE | `/api/keys/{id}` | admin | patch (budget, `allow_live`, `assigned_user_id`/`clear_assignment`) / revoke |
 | GET | `/api/requests` | admin | recent request log (`?limit&cursor&provider&model&key_id&status&start&end`) |
 | GET | `/api/usage/summary` `\|` `/timeseries` `\|` `/by-key` `\|` `/by-model` | member | dashboard aggregates (`start,end,provider,model,key_id`); admin → whole workspace, member → assigned keys. `summary` adds `latency_p50_ms`, `latency_p95_ms`, `error_rate`, `tokens_per_sec` |
-| **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}` → OpenAI `chat.completion` (or SSE chunks). `402` over budget/cap or no provider key, `403` paused / provider not on key, `502` upstream failure. |
+| **POST** | **`/v1/chat/completions`** | Bearer `vk_…` | **OpenAI-compatible.** `{model:"<provider>/<slug>", messages[], stream?}`. For `openai`/`openrouter`: full-fidelity passthrough (tools, tool_choice, response_format, multimodal content — the real provider response, untouched). For `anthropic`/`gemini`: legacy translation (flattened prompt, gateway-built envelope). `402` over budget/cap or no provider key, `403` paused / provider or model not on key, `502` upstream failure. |
+| **POST** | **`/v1/messages`** | Bearer `vk_…` | **Anthropic Messages passthrough** (`anthropic` only). `{model, max_tokens, messages[], system?, tools?, stream?, ...}` forwarded almost verbatim → the real Anthropic response. `max_tokens` is required by Anthropic itself — the gateway no longer defaults it. |
+| **POST** | **`/v1/responses`** | Bearer `vk_…` | **OpenAI Responses API passthrough** (`openai` only). `{model, input, tools?, stream?, ...}` forwarded almost verbatim → the real OpenAI response. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + `{provider, ready}` (ready = a workspace key exists) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
 
 The proxy (`/v1/*`) requires a `vk_…` key and is workspace-agnostic — the key itself is the
-credential.
+credential. `/v1/messages` and `/v1/responses` validate only `model` server-side; everything else
+in the request body is the client's own JSON, sent upstream unmodified — the real `anthropic` /
+`openai` SDKs work by pointing `base_url` at the gateway with no other code change (see
+"Example integrations" below).
+
+### Example integrations
+
+```python
+# OpenAI SDK — Chat Completions or Responses, full fidelity (tools, streaming, etc.)
+from openai import OpenAI
+client = OpenAI(base_url="https://<host>/v1", api_key="vk_...")
+client.chat.completions.create(model="openai/gpt-4o-mini", messages=[...], tools=[...])
+client.responses.create(model="gpt-4o-mini", input="...", tools=[...])
+
+# Anthropic SDK — native Messages API
+from anthropic import Anthropic
+client = Anthropic(base_url="https://<host>", api_key="vk_...")
+client.messages.create(model="claude-3-5-sonnet-20241022", max_tokens=1024, messages=[...])
+
+# LangChain — point it at the gateway like any OpenAI-compatible endpoint
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(base_url="https://<host>/v1", api_key="vk_...", model="openai/gpt-4o-mini")
+```
+
+The gateway never executes tool/function calls — it only proxies the LLM turn. A LangGraph/
+LangChain agent (or any framework) keeps running its own tools locally and sends the result back
+as the next request; the gateway just re-authorizes, re-budgets, and forwards each turn.
 
 ---
 
@@ -264,19 +318,31 @@ credential.
   expired.
 - **virtual_keys** — `id, workspace_id → workspaces (`ON DELETE CASCADE`), assigned_user_id →
   users (nullable), label, key_hash, key_prefix, allow_live, default_provider,
-  monthly_budget_usd, budget_period, budget_start, budget_end, created_at, last_used_at,
-  revoked_at`. `assigned_user_id` NULL = workspace-level (admin-only visibility); set = that
-  Team Member sees it. Only the HMAC hash + an 11-char prefix are stored; the raw key is shown
-  once. Per-key **budget**: `$X` per `1 day` / `1 week` / `1 month` (rolling), or a `custom`
-  fixed `[budget_start, budget_end]` range → `402` when spent.
+  monthly_budget_usd, budget_period, budget_start, budget_end, expires_at (nullable),
+  created_at, last_used_at, revoked_at`. `assigned_user_id` NULL = workspace-level (admin-only
+  visibility); set = that Team Member sees it. Only the HMAC hash + an 11-char prefix are stored;
+  the raw key is shown once. Per-key **budget**: `$X` per `1 day` / `1 week` / `1 month`
+  (rolling), or a `custom` fixed `[budget_start, budget_end]` range → `402` when spent.
+  `expires_at` NULL = never expires; past it, `require_virtual_key` rejects the key with the same
+  generic `401` as a revoked/unknown one (no state leak).
 - **allowed_providers** — `(virtual_key_id, provider)`, unique. The per-key provider ACL enforced
   on every proxied request.
+- **allowed_models** — `(virtual_key_id, provider, model)`, unique. An explicit per-model
+  allow-list layered on top of `allowed_providers`: zero rows for a given `(key, provider)` pair
+  means every model of that provider is allowed (the default, unchanged from before this table
+  existed); any row present flips that provider to an explicit allow-list, enforced by
+  `gateway.authorize_model` (`403 model_not_allowed` on a miss).
 - **usage_logs** — `id, key_id, request_id, provider, model, prompt_tokens, completion_tokens,
-  total_tokens, cost, cost_source, latency_ms, status, prompt_preview, response_preview, ts`
-  (`mode` / `simulated` are legacy columns from the retired simulator — always `live` / `false`).
-  Workspace ownership flows through `key_id → virtual_keys.workspace_id`. `cost_source` =
-  `provider` (real charge) or `configured` (tokens × price table). `status` = `success` or
-  `error` (a failed upstream call still records a row). Previews are null unless `LOG_BODIES=true`.
+  total_tokens, cost (nullable), cost_source, latency_ms, status, prompt_preview,
+  response_preview, usage_raw (jsonb, nullable), ts` (`mode` / `simulated` are legacy columns
+  from the retired simulator — always `live` / `false`). Workspace ownership flows through
+  `key_id → virtual_keys.workspace_id`. `cost_source` = `provider` (real charge) | `configured`
+  (tokens × price table) | `unknown` (neither available — `cost` is `NULL`, never a fabricated
+  number; every `SUM(cost)` in the codebase already `coalesce`s, so this is safe). `usage_raw`
+  holds whatever extra usage detail a provider's own response exposed (cached/reasoning tokens,
+  prompt-cache reads/writes, per-modality token counts, ...) verbatim, provider-shaped — see
+  `app/adapters/base.py::UsageInfo`. `status` = `success` or `error` (a failed upstream call
+  still records a row). Previews are null unless `LOG_BODIES=true`.
 - **provider_credentials** — `(id, workspace_id → workspaces (`ON DELETE CASCADE`), provider,
   ciphertext, last4, monthly_cap_usd, updated_at)`, unique on `(workspace_id, provider)`. The
   workspace's own provider key; its `allow_live` virtual keys call real providers on it, and
@@ -288,14 +354,47 @@ credential.
 There is no Alembic. `app/bootstrap.py::_migrate` runs guarded `information_schema` checks +
 `ALTER TABLE`s on boot. The v6 migration adds the workspace tables/columns, moves each existing
 account into a personal workspace as its admin (keys carried over), drops the old global-admin
-account and `virtual_keys.user_id`.
+account and `virtual_keys.user_id`. v7 adds `virtual_keys.expires_at`, the `allowed_models`
+table, and `usage_logs.usage_raw`/nullable `cost` — all additive and backward compatible with
+every key created before them.
+
+### Adapter architecture
+
+`app/adapters/` holds one module per provider (`openai_adapter.py` covers both OpenAI and
+OpenRouter, which share the Chat Completions wire format; `anthropic_adapter.py` covers
+Anthropic's Messages API). Each adapter owns its own request construction and response
+parsing — the governance layer above it (`app/gateway.py`: auth, provider/model ACL, budgets,
+workspace caps) and the HTTP layer below it (`app/providers.py::send_request` /
+`stream_request`, the single outbound-HTTP chokepoint every adapter and the legacy
+`call_provider`/`stream_openai_compatible` functions funnel through) are shared; the
+provider-specific shape in between is deliberately **not** collapsed into one common format. A
+non-streaming native call returns the provider's raw JSON to the client, untouched;
+`app/adapters/base.py::UsageInfo` is only what governance/logging need, pulled out of that real
+response.
+
+### What's not proxied (and why)
+
+- **OpenAI Realtime / a future Gemini Live API** — WebSocket, not request/response. The whole
+  governance funnel (budget check → call → one `usage_logs` row) assumes one HTTP request is one
+  billable unit; a persistent socket has no such boundary.
+- **OpenAI Files / Batches / (deprecated) Assistants, Anthropic's Files API** — multipart
+  upload + reference-by-id + poll/webhook lifecycles are a different protocol shape than
+  synchronous chat, and imply tracking an object that outlives any single request — no such
+  concept exists in the schema today.
+- **Gemini's Interactions API stateful/background modes** (`store:true` server-side history,
+  `background:true` async execution) — real Gemini support is scoped for Phase 2 via the
+  simpler, stateless `generateContent`/`streamGenerateContent` surface first (Google's own
+  recommendation for stable integrations); the stateful/async modes raise a real question — does
+  a workspace consent to a provider retaining conversation state server-side? — that needs an
+  explicit answer before it's wired in, not a silent default.
 
 ---
 
 ## Future improvements
 
-Per-key rate limits (RPM/TPM) · per-model budgets · webhook/Slack alerts · usage-anomaly
-detection · Prometheus `/metrics` · pricing catalog auto-synced from
-OpenRouter `/api/v1/models` · exact-match response cache · provider fallback on live error ·
-Alembic migrations + backups · Redis for shared rate-limit / budget counters · SSO / org
+Gemini-native adapter (Phase 2) · embeddings / image / audio APIs, model-registry admin UI, a
+LangGraph end-to-end test harness (Phase 3) · per-key rate limits (RPM/TPM) · per-model budgets ·
+webhook/Slack alerts · usage-anomaly detection · Prometheus `/metrics` · exact-match response
+cache · provider fallback on live error · Alembic migrations + backups · Redis for shared
+rate-limit / budget counters · SSO / org
 hierarchy · OpenTelemetry traces.

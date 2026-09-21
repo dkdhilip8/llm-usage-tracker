@@ -29,6 +29,17 @@ def _has_table(db: Session, table: str) -> bool:
     )
 
 
+def _col_nullable(db: Session, table: str, col: str) -> bool:
+    val = db.scalar(
+        text(
+            "SELECT is_nullable FROM information_schema.columns "
+            "WHERE table_name = :t AND column_name = :c"
+        ),
+        {"t": table, "c": col},
+    )
+    return val == "YES"
+
+
 def _migrate(db: Session) -> None:
     # v1: multi-tenancy — virtual_keys.user_id (skipped once v6 has re-anchored on workspace_id)
     if not _has_col(db, "virtual_keys", "user_id") and not _has_col(
@@ -69,6 +80,24 @@ def _migrate(db: Session) -> None:
 
     # v6: workspaces as the tenant boundary; the global admin is gone.
     _migrate_v6_workspaces(db)
+
+    # v7: adapter foundation — key expiry, per-model ACL, honest/richer usage capture.
+    if not _has_col(db, "virtual_keys", "expires_at"):
+        db.execute(text("ALTER TABLE virtual_keys ADD COLUMN expires_at TIMESTAMPTZ"))
+        db.commit()
+    if not _has_table(db, "allowed_models"):
+        from app.models import AllowedModel
+
+        AllowedModel.__table__.create(bind=db.get_bind(), checkfirst=True)
+        db.commit()
+    if not _has_col(db, "usage_logs", "usage_raw"):
+        db.execute(text("ALTER TABLE usage_logs ADD COLUMN usage_raw JSONB"))
+        db.commit()
+    # cost becomes nullable — "unknown" is now an honest possibility instead of
+    # a fabricated fallback price (pricing.py no longer guesses).
+    if not _col_nullable(db, "usage_logs", "cost"):
+        db.execute(text("ALTER TABLE usage_logs ALTER COLUMN cost DROP NOT NULL"))
+        db.commit()
 
 
 def _migrate_v6_workspaces(db: Session) -> None:

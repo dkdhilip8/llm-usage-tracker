@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db import get_db
 from app.gateway import (
+    authorize_model,
     authorize_provider,
     enforce_budget,
     enforce_workspace_cap,
@@ -46,6 +47,7 @@ def proxy_chat(
     db: Session = Depends(get_db),
 ) -> ChatResponse:
     authorize_provider(vk, body.provider)
+    authorize_model(vk, body.provider, body.model)
     prompt = _extract_prompt(body)
     if not prompt:
         raise HTTPException(422, "prompt or messages is required")

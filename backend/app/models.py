@@ -13,6 +13,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db import Base
@@ -113,8 +114,16 @@ class VirtualKey(Base):
     )
     last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Null = never expires. Past this instant, require_virtual_key rejects the
+    # key with the same generic 401 as a revoked/unknown key (no state leak).
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     allowed_providers: Mapped[list["AllowedProvider"]] = relationship(
+        back_populates="virtual_key",
+        cascade="all, delete-orphan",
+        lazy="selectin",
+    )
+    allowed_models: Mapped[list["AllowedModel"]] = relationship(
         back_populates="virtual_key",
         cascade="all, delete-orphan",
         lazy="selectin",
@@ -122,6 +131,12 @@ class VirtualKey(Base):
 
     def provider_names(self) -> list[str]:
         return sorted(ap.provider for ap in self.allowed_providers)
+
+    def models_for(self, provider: str) -> list[str]:
+        """Explicit per-model allow-list for one provider. Empty = every model
+        of that provider is allowed (the default — matches every key created
+        before per-model ACLs existed)."""
+        return sorted(am.model for am in self.allowed_models if am.provider == provider)
 
 
 class AllowedProvider(Base):
@@ -137,6 +152,27 @@ class AllowedProvider(Base):
     provider: Mapped[str] = mapped_column(String, nullable=False)
 
     virtual_key: Mapped[VirtualKey] = relationship(back_populates="allowed_providers")
+
+
+class AllowedModel(Base):
+    """An explicit per-model allow-list entry for a virtual key. Zero rows for a
+    given (virtual_key_id, provider) pair means every model of that provider is
+    allowed — the default, fully backward compatible. Any row present for that
+    pair flips enforcement (gateway.authorize_model) to an explicit allow-list."""
+
+    __tablename__ = "allowed_models"
+    __table_args__ = (
+        UniqueConstraint("virtual_key_id", "provider", "model", name="uq_allowed_model"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    virtual_key_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("virtual_keys.id", ondelete="CASCADE"), nullable=False
+    )
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+
+    virtual_key: Mapped[VirtualKey] = relationship(back_populates="allowed_models")
 
 
 class ProviderCredential(Base):
@@ -180,9 +216,12 @@ class UsageLog(Base):
     prompt_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     completion_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
     total_tokens: Mapped[int] = mapped_column(Integer, nullable=False)
-    # USD. When cost_source == "provider" this is the amount the provider actually
-    # charged (OpenRouter's usage.cost); when "configured" it's tokens x price table.
-    cost: Mapped[float] = mapped_column(Numeric(12, 6), nullable=False)
+    # USD, nullable. When cost_source == "provider" this is the amount the
+    # provider actually charged (e.g. OpenRouter's usage.cost); "configured" =
+    # tokens x price table; "unknown" = neither is available (cost is NULL —
+    # an honest gap, never a fabricated number). Every SUM(cost) aggregate in
+    # this codebase already wraps in coalesce(..., 0), so a NULL row is safe.
+    cost: Mapped[float | None] = mapped_column(Numeric(12, 6))
     cost_source: Mapped[str] = mapped_column(String, nullable=False, default="configured")
     # Legacy columns from the retired simulator — always written "live" / False now.
     simulated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
@@ -192,6 +231,10 @@ class UsageLog(Base):
     # Truncated request/response text — populated only when LOG_BODIES=true.
     prompt_preview: Mapped[str | None] = mapped_column(Text)
     response_preview: Mapped[str | None] = mapped_column(Text)
+    # Whatever extra usage detail the provider's own response exposed (cached
+    # tokens, reasoning tokens, cache-write tokens, per-modality breakdown,
+    # ...), verbatim and provider-shaped — see adapters/base.py::UsageInfo.raw.
+    usage_raw: Mapped[dict | None] = mapped_column(JSONB)
     # spec's "timestamp"; named `ts` to dodge the SQL type-name clash.
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

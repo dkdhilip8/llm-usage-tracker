@@ -5,7 +5,7 @@ import secrets
 import time
 
 from fastapi import Cookie, Depends, Header, HTTPException
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.config import settings
@@ -108,7 +108,7 @@ def require_virtual_key(
     authorization: str = Header(default=""),
     db: Session = Depends(get_db),
 ) -> VirtualKey:
-    """A valid, non-revoked virtual key is mandatory — this is a gateway."""
+    """A valid, non-revoked, unexpired virtual key is mandatory — this is a gateway."""
     if not authorization.lower().startswith("bearer "):
         raise HTTPException(401, "missing 'Authorization: Bearer vk_...'")
     raw = authorization.split(" ", 1)[1].strip()
@@ -116,8 +116,11 @@ def require_virtual_key(
         select(VirtualKey).where(
             VirtualKey.key_hash == key_hash(raw),
             VirtualKey.revoked_at.is_(None),
+            or_(VirtualKey.expires_at.is_(None), VirtualKey.expires_at > func.now()),
         )
     )
     if vk is None:
+        # Deliberately the same generic message for "never existed", "revoked",
+        # and "expired" — don't hand an attacker information about key state.
         raise HTTPException(401, "invalid or revoked virtual key")
     return vk

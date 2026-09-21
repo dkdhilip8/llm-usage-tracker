@@ -44,6 +44,33 @@ _CHAT_URLS = {
 _cache: dict[str, tuple[bool, float]] = {}
 
 
+# ---- the one chokepoint for outbound provider HTTP calls ----
+# Every adapter (app/adapters/*) and the legacy call_provider/stream_openai_compatible
+# below funnel through these two functions. Tests monkeypatch these (or the
+# higher-level functions that call them) to avoid any real network call.
+def send_request(url: str, headers: dict, json_body: dict, *, timeout: float = 60.0) -> dict:
+    """One blocking POST, parsed JSON response. Raises httpx.HTTPStatusError (via
+    raise_for_status) or a transport error on failure — callers turn that into a
+    502 upstream_error."""
+    r = httpx.post(url, headers=headers, json=json_body, timeout=timeout)
+    r.raise_for_status()
+    return r.json()
+
+
+def stream_request(
+    url: str, headers: dict, json_body: dict, *, timeout: float = 60.0
+) -> Iterator[str]:
+    """Streaming POST: yields raw response lines (already text-decoded) exactly
+    as httpx reassembles them from the chunked transfer — this is line-oriented
+    because SSE itself is line-oriented (`event: ...` / `data: ...` / blank
+    separators), so re-emitting each line reconstructs a spec-compliant stream
+    without buffering the whole response first."""
+    with httpx.Client(timeout=timeout) as client:
+        with client.stream("POST", url, headers=headers, json=json_body) as r:
+            r.raise_for_status()
+            yield from r.iter_lines()
+
+
 def resolved_key(provider: str) -> str:
     """The instance-wide server env var for this provider, if any."""
     return settings.provider_api_key(provider)
@@ -149,18 +176,15 @@ def call_provider(
     headers = _auth_headers(provider, api_key)
 
     if provider == "anthropic":
-        r = httpx.post(
+        data = send_request(
             _CHAT_URLS[provider],
-            headers=headers,
-            json={
+            headers,
+            {
                 "model": model,
                 "max_tokens": 1024,
                 "messages": [{"role": "user", "content": prompt}],
             },
-            timeout=60.0,
         )
-        r.raise_for_status()
-        data = r.json()
         text = "".join(block.get("text", "") for block in data.get("content", []))
         usage = data.get("usage", {})
         return (
@@ -180,9 +204,7 @@ def call_provider(
         }
         body["usage"] = {"include": True}  # ask OpenRouter to return the real cost
 
-    r = httpx.post(_CHAT_URLS[provider], headers=headers, json=body, timeout=60.0)
-    r.raise_for_status()
-    data = r.json()
+    data = send_request(_CHAT_URLS[provider], headers, body)
     text = data["choices"][0]["message"]["content"]
     usage = data.get("usage", {})
     actual_cost = usage.get("cost")  # present for OpenRouter, absent for OpenAI
@@ -220,29 +242,24 @@ def stream_openai_compatible(
 
     pt = ct = 0
     cost: float | None = None
-    with httpx.Client(timeout=60.0) as client:
-        with client.stream(
-            "POST", _CHAT_URLS[provider], headers=headers, json=body
-        ) as r:
-            r.raise_for_status()
-            for line in r.iter_lines():
-                if not line or not line.startswith("data:"):
-                    continue
-                payload = line[5:].strip()
-                if payload == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(payload)
-                except json.JSONDecodeError:
-                    continue
-                for choice in chunk.get("choices", []) or []:
-                    delta = (choice.get("delta") or {}).get("content")
-                    if delta:
-                        yield ("delta", delta)
-                u = chunk.get("usage")
-                if u:
-                    pt = int(u.get("prompt_tokens", pt) or pt)
-                    ct = int(u.get("completion_tokens", ct) or ct)
-                    if u.get("cost") is not None:
-                        cost = float(u["cost"])
+    for line in stream_request(_CHAT_URLS[provider], headers, body):
+        if not line or not line.startswith("data:"):
+            continue
+        payload = line[5:].strip()
+        if payload == "[DONE]":
+            break
+        try:
+            chunk = json.loads(payload)
+        except json.JSONDecodeError:
+            continue
+        for choice in chunk.get("choices", []) or []:
+            delta = (choice.get("delta") or {}).get("content")
+            if delta:
+                yield ("delta", delta)
+        u = chunk.get("usage")
+        if u:
+            pt = int(u.get("prompt_tokens", pt) or pt)
+            ct = int(u.get("completion_tokens", ct) or ct)
+            if u.get("cost") is not None:
+                cost = float(u["cost"])
     yield ("done", {"prompt_tokens": pt, "completion_tokens": ct, "cost": cost})

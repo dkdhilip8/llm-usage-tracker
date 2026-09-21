@@ -7,9 +7,9 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import get_db
 from app.gateway import period_spend, workspace_has_live_provider
-from app.models import AllowedProvider, UsageLog, User, VirtualKey
+from app.models import AllowedModel, AllowedProvider, UsageLog, User, VirtualKey
 from app.providers import SUPPORTED
-from app.schemas import KeyCreate, KeyCreated, KeyOut, KeyUpdate
+from app.schemas import AllowedModelsIn, KeyCreate, KeyCreated, KeyOut, KeyUpdate
 from app.security import new_key
 from app.workspace import Membership, require_membership, require_workspace_admin
 
@@ -40,6 +40,24 @@ def _custom_window(body) -> tuple[datetime, datetime]:
     start = datetime.combine(body.budget_start, datetime.min.time(), tzinfo=UTC)
     end = datetime.combine(body.budget_end, datetime.min.time(), tzinfo=UTC) + timedelta(days=1)
     return start, end
+
+
+def _build_allowed_models(
+    allowed_models: AllowedModelsIn | None, providers: list[str]
+) -> list[AllowedModel]:
+    if not allowed_models:
+        return []
+    rows: list[AllowedModel] = []
+    for provider, models in allowed_models.items():
+        if provider not in providers:
+            raise HTTPException(
+                422, f"allowed_models has provider '{provider}' not in allowed_providers"
+            )
+        for model in models:
+            model = (model or "").strip()
+            if model:
+                rows.append(AllowedModel(provider=provider, model=model))
+    return rows
 
 
 def _in_workspace(db: Session, key_id: int, m: Membership) -> VirtualKey:
@@ -101,7 +119,9 @@ def create_key(
         budget_period=body.budget_period,
         budget_start=b_start,
         budget_end=b_end,
+        expires_at=body.expires_at,
         allowed_providers=[AllowedProvider(provider=p) for p in providers],
+        allowed_models=_build_allowed_models(body.allowed_models, providers),
     )
     db.add(vk)
     db.commit()
@@ -149,6 +169,7 @@ def list_keys(
                 budget_period=k.budget_period,
                 budget_start=k.budget_start,
                 budget_end=k.budget_end,
+                expires_at=k.expires_at,
                 spend_period=period_spend(db, k),
                 created_at=k.created_at,
                 last_used_at=k.last_used_at,
@@ -191,6 +212,14 @@ def update_key(
         vk.monthly_budget_usd = None
     elif body.monthly_budget_usd is not None:
         vk.monthly_budget_usd = body.monthly_budget_usd
+    if body.clear_expiry:
+        vk.expires_at = None
+    elif body.expires_at is not None:
+        vk.expires_at = body.expires_at
+    if body.clear_allowed_models:
+        vk.allowed_models = []
+    elif body.allowed_models is not None:
+        vk.allowed_models = _build_allowed_models(body.allowed_models, vk.provider_names())
     db.commit()
     return {
         "id": vk.id,
@@ -201,6 +230,7 @@ def update_key(
         "budget_period": vk.budget_period,
         "budget_start": vk.budget_start.isoformat() if vk.budget_start else None,
         "budget_end": vk.budget_end.isoformat() if vk.budget_end else None,
+        "expires_at": vk.expires_at.isoformat() if vk.expires_at else None,
     }
 
 
@@ -230,5 +260,6 @@ def _created(vk: VirtualKey, raw: str) -> KeyCreated:
         budget_period=vk.budget_period,
         budget_start=vk.budget_start,
         budget_end=vk.budget_end,
+        expires_at=vk.expires_at,
         created_at=vk.created_at,
     )

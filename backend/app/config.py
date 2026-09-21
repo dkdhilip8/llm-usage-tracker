@@ -70,7 +70,7 @@ class Settings(BaseSettings):
     # Off by default — request bodies can contain sensitive data.
     LOG_BODIES: bool = False
 
-    VERSION: str = "0.11.0"
+    VERSION: str = "0.12.0"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":
