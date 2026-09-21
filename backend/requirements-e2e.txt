@@ -1,0 +1,9 @@
+# Optional — only needed for tests/test_e2e_langgraph.py. Not installed in the
+# default dev/test image; those tests use pytest.importorskip and skip cleanly
+# without these. Install explicitly to run them:
+#   pip install -r requirements-e2e.txt
+-r requirements-dev.txt
+langgraph==1.2.12
+langchain-openai==1.6.2
+langchain-anthropic==1.7.2
+langchain-google-genai==4.4.0

@@ -149,6 +149,28 @@ cd ../frontend && npm ci && npm run typecheck && npm test
 
 `.github/workflows/ci.yml` runs all of the above plus `docker build` once committed.
 
+### E2E agent harness
+
+`tests/test_e2e_langgraph.py` proves the gateway works as the credential layer for a **real
+multi-agent app**, not just a raw HTTP client: a genuine `langgraph.prebuilt.create_react_agent`,
+driven by the real `langchain-openai` / `langchain-anthropic` / `langchain-google-genai` SDKs
+pointed at the gateway via `base_url`, runs a real multi-turn tool-calling loop — the model
+requests a tool call, the agent executes it **locally** (proving the gateway never runs a tool
+itself), the result goes back as a follow-up turn, the model answers — once per provider. It
+spins up a real local `uvicorn` server (all three SDKs need a real socket for `base_url`; only
+`langchain-openai` supports a fully custom `httpx` transport, so a real server is the one
+mechanism that works identically for all three) and still mocks the actual upstream HTTP call at
+`app.providers.send_request` — deterministic and offline, but the response shapes are realistic
+enough that each real SDK parses them exactly as it would a live response.
+
+These tests need heavier optional deps not in `requirements-dev.txt` — they skip cleanly
+(`pytest.importorskip`) everywhere else, including CI and the production image:
+
+```bash
+cd backend && pip install -r requirements-e2e.txt
+pytest tests/test_e2e_langgraph.py -v
+```
+
 ### Smoke test
 
 ```bash
@@ -425,9 +447,8 @@ rather than summing deltas. Embeddings never stream (no provider offers it) and 
 
 ## Future improvements
 
-Image / audio APIs, model-registry admin UI, a LangGraph end-to-end test harness (Phase 3
-continued) · Gemini built-in tools (code execution, Search grounding) test coverage · per-key
-rate limits (RPM/TPM) · per-model budgets · webhook/Slack alerts · usage-anomaly detection ·
-Prometheus `/metrics` · exact-match response cache · provider fallback on live error · Alembic
-migrations + backups · Redis for shared rate-limit / budget counters · SSO / org hierarchy ·
-OpenTelemetry traces.
+Image / audio APIs, model-registry admin UI (Phase 3 continued) · production-hardening pass —
+reliability, rate limiting, observability, security, cost accuracy, scalability, database
+hardening, CI/CD, production-readiness review · Gemini built-in tools (code execution, Search
+grounding) test coverage · per-model budgets · webhook/Slack alerts · usage-anomaly detection ·
+exact-match response cache · Redis for shared rate-limit / budget counters · SSO / org hierarchy.
