@@ -210,3 +210,43 @@ def test_generate_content_missing_model_404(client, make_live_key):
         headers=_goog(k["key"]),
     )
     assert r.status_code in (404, 422)
+
+
+def test_image_generation_needs_no_new_endpoint_just_an_image_capable_model(client, admin_client, make_live_key, monkeypatch):
+    """Gemini image generation is reached through this SAME generateContent
+    endpoint (an image-capable model + generationConfig.responseModalities)
+    — no dedicated image endpoint exists or is needed, since the adapter
+    never validates/transforms the body or response beyond `model`. Proves
+    it round-trips: the responseModalities request field forwards untouched,
+    and a response with an inlineData image part (no text at all) doesn't
+    crash usage/preview extraction."""
+
+    def fake_send(url, headers, json_body, *, timeout=60.0):
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"inlineData": {"mimeType": "image/png", "data": "ZmFrZQ=="}}],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 8, "candidatesTokenCount": 1290, "totalTokenCount": 1298},
+        }
+
+    monkeypatch.setattr("app.providers.send_request", fake_send)
+    k = make_live_key(allowed_providers=["gemini"])
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": "a red bicycle"}]}],
+        "generationConfig": {"responseModalities": ["IMAGE"]},
+    }
+    r = client.post(_gen_url("gemini-2.5-flash-image"), json=body, headers=_goog(k["key"]))
+    assert r.status_code == 200
+    j = r.json()
+    assert j["candidates"][0]["content"]["parts"][0]["inlineData"]["mimeType"] == "image/png"
+
+    items = admin_client.get("/api/requests").json()["items"]
+    assert items[0]["prompt_tokens"] == 8 and items[0]["completion_tokens"] == 1290
+    # no text part anywhere in the response -> text preview is empty, not a crash
+    assert items[0]["response_preview"] in (None, "")

@@ -178,6 +178,47 @@ def embeddings_preview(response: dict) -> str:
     return f"{n} embedding(s)"
 
 
+# ---- Images: generation only (openai only — no streaming) ----
+# Edits/variations use multipart/form-data (file upload), a genuinely different
+# request shape than every other endpoint here (all JSON bodies) — deliberately
+# out of scope for now, same as Files/Batches were in Phase 1: documented, not
+# silently dropped. Generation (text -> image) is a plain JSON body.
+_IMAGES_URL = "https://api.openai.com/v1/images/generations"
+
+
+def call_images(body: dict, api_key: str) -> dict:
+    return providers.send_request(_IMAGES_URL, _bearer_headers(api_key), body, timeout=120.0)
+
+
+def extract_images_usage(response: dict) -> UsageInfo:
+    """Only gpt-image-1 reports usage; dall-e-2/3 report none at all (the
+    response has no `usage` key), which honestly resolves to cost_source
+    "unknown" downstream — never a guessed number. gpt-image-1's own real
+    usage mixes text tokens and image tokens at different per-1M rates
+    ($5/$10 in, $40 out, roughly), which doesn't fit this table's single
+    input/output rate without fabricating a blended price — left unregistered
+    in pricing.py for the same reason; the raw text/image token split is
+    still captured below for anyone who wants to compute their own rate (or
+    a workspace can register one via the model pricing registry)."""
+    usage = response.get("usage")
+    if not usage:
+        return UsageInfo(prompt_tokens=0, completion_tokens=0, cost=None, raw={})
+    raw = {
+        k: usage[k] for k in ("input_tokens_details", "output_tokens_details") if k in usage
+    }
+    return UsageInfo(
+        prompt_tokens=int(usage.get("input_tokens", 0)),
+        completion_tokens=int(usage.get("output_tokens", 0)),
+        cost=None,  # the Images API never reports a per-request $ charge
+        raw=raw,
+    )
+
+
+def images_preview(response: dict) -> str:
+    n = len(response.get("data") or [])
+    return f"{n} image(s)"
+
+
 # ---- shared ----
 def prompt_preview(body: dict) -> str:
     """Human-readable stand-in for usage_logs.prompt_preview (only stored when
@@ -192,4 +233,7 @@ def prompt_preview(body: dict) -> str:
         return inp
     if isinstance(inp, list) and inp and isinstance(inp[0], str):
         return " | ".join(inp[:5])
+    prompt = body.get("prompt")  # images/generations' field name
+    if isinstance(prompt, str):
+        return prompt
     return ""

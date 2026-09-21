@@ -27,10 +27,12 @@ usage and cost on a dashboard. OpenAI · Anthropic · OpenRouter · Google Gemin
 > Messages: system prompt, content blocks, tool use, prompt caching), `/v1/responses` (OpenAI
 > Responses API), and `/v1beta/models/{model}:generateContent` /
 > `:streamGenerateContent` (Gemini: `contents`/`parts`, `systemInstruction`, function calling,
-> built-in tools, multimodal `inline_data`/`file_data`), and `/v1/embeddings` /
+> built-in tools, multimodal `inline_data`/`file_data`), `/v1/embeddings` /
 > `:embedContent` / `:batchEmbedContents` (OpenAI and Gemini embeddings — Anthropic has none of
-> its own). Point the real `openai`/`anthropic`/`google-genai` SDK's `base_url` at the gateway and
-> it works unmodified: multi-turn history,
+> its own), and `/v1/images/generations` (OpenAI image generation — Gemini's image generation
+> needs no endpoint of its own, since it's just an image-capable model on the same
+> `generateContent`). Point the real `openai`/`anthropic`/`google-genai` SDK's `base_url` at the
+> gateway and it works unmodified: multi-turn history,
 > tools/function-calling, structured outputs, and multimodal content parts all ride through
 > untouched — the gateway validates only `model` and never reconstructs the request field-by-field.
 > Each SDK's own default auth header is honored (`Authorization: Bearer`, `x-api-key`, or
@@ -314,18 +316,23 @@ membership (`403` if signed in but not in one).
 | **POST** | **`/v1/embeddings`** | Bearer `vk_…` | **OpenAI Embeddings passthrough** (`openai` only). `{model, input, dimensions?, encoding_format?, ...}` forwarded almost verbatim → the real OpenAI response. No streaming — the API doesn't support it. |
 | **POST** | **`/v1beta/models/{model}:embedContent`** | `x-goog-api-key: vk_…` | **Gemini Embeddings passthrough** (`gemini` only). `{content, taskType?, outputDimensionality?, ...}` forwarded almost verbatim. |
 | **POST** | **`/v1beta/models/{model}:batchEmbedContents`** | `x-goog-api-key: vk_…` | Same, batched: `{requests: [{content, ...}, ...]}` → embeds every entry in one call. |
+| **POST** | **`/v1/images/generations`** | Bearer `vk_…` | **OpenAI Images passthrough** (`openai` only). `{model, prompt, size?, quality?, n?, ...}` forwarded almost verbatim → the real OpenAI response. Generation only — edits/variations (multipart file upload) aren't proxied, see "What's not proxied". No streaming. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + `{provider, ready}` (ready = a workspace key exists) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
 
 The proxy (`/v1/*`, `/v1beta/*`) requires a `vk_…` key and is workspace-agnostic — the key itself
 is the credential, accepted in whichever header a provider's own SDK sends it in by default
 (`Authorization: Bearer`, `x-api-key`, or `x-goog-api-key` — all three resolve the same key).
-`/v1/messages`, `/v1/responses`, `/v1/embeddings`, and the Gemini native endpoints validate only
-`model` server-side; everything else in the request body is the client's own JSON, sent upstream
-unmodified — the real `anthropic` / `openai` / `google-genai` SDKs work by pointing `base_url` at
-the gateway with no other code change (see "Example integrations" below). Anthropic has no
-embeddings API of its own (their docs point integrators at a third party) — there's nothing to
-proxy there.
+`/v1/messages`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, and the Gemini native
+endpoints validate only `model` server-side; everything else in the request body is the client's
+own JSON, sent upstream unmodified — the real `anthropic` / `openai` / `google-genai` SDKs work by
+pointing `base_url` at the gateway with no other code change (see "Example integrations" below).
+Anthropic has no embeddings or image-generation API of its own (their docs point integrators at a
+third party) — there's nothing to proxy there. Gemini's image generation needs no endpoint of its
+own — point it at `/v1beta/models/{image-capable-model}:generateContent` with
+`generationConfig.responseModalities` set, exactly like any other `generateContent` call; the
+gateway never inspects the response beyond pulling out token counts for logging, so an inline
+image part rides through exactly like an inline text part always has.
 
 ### Example integrations
 
@@ -336,16 +343,21 @@ client = OpenAI(base_url="https://<host>/v1", api_key="vk_...")
 client.chat.completions.create(model="openai/gpt-4o-mini", messages=[...], tools=[...])
 client.responses.create(model="gpt-4o-mini", input="...", tools=[...])
 client.embeddings.create(model="text-embedding-3-small", input="hello")
+client.images.generate(model="gpt-image-1", prompt="a red bicycle", size="1024x1024")
 
 # Anthropic SDK — native Messages API
 from anthropic import Anthropic
 client = Anthropic(base_url="https://<host>", api_key="vk_...")
 client.messages.create(model="claude-3-5-sonnet-20241022", max_tokens=1024, messages=[...])
 
-# Google GenAI SDK — native generateContent + embeddings
+# Google GenAI SDK — native generateContent (text, image gen, embeddings)
 from google import genai
 client = genai.Client(api_key="vk_...", http_options={"base_url": "https://<host>"})
 client.models.generate_content(model="gemini-2.5-flash", contents="hi")
+client.models.generate_content(  # image generation — same method, an image-capable model
+    model="gemini-2.5-flash-image", contents="a red bicycle",
+    config={"response_modalities": ["IMAGE"]},
+)
 client.models.embed_content(model="gemini-embedding-001", contents="hi")
 
 # LangChain — point it at the gateway like any OpenAI-compatible endpoint
@@ -454,8 +466,14 @@ common format. A non-streaming native call returns the provider's raw JSON to th
 untouched; `app/adapters/base.py::UsageInfo` is only what governance/logging need, pulled out of
 that real response. Gemini's `usageMetadata` is cumulative per streamed chunk (unlike
 Anthropic's two split SSE events), so `GeminiStreamUsageAccumulator` just keeps the latest values
-rather than summing deltas. Embeddings never stream (no provider offers it) and always report
-`completion_tokens=0` — the wire format has no output tokens to count.
+rather than summing deltas. Embeddings and image generation never stream on the OpenAI side (no
+streaming attempted this pass; embeddings never report output tokens either — both honestly report
+`completion_tokens=0` rather than guess). OpenAI Images has a real complication worth naming: only
+`gpt-image-1` reports usage at all (dall-e-2/3 report none), and what it reports mixes text tokens
+and image tokens at different per-1M rates — the built-in price table's single input/output rate
+can't represent that honestly, so it's deliberately left unregistered (`cost_source: "unknown"`,
+never a guessed blended number) while the real text/image token split still lands in `usage_raw`
+for a workspace's own pricing (see "Model pricing registry").
 
 ### What's not proxied (and why)
 
@@ -466,10 +484,13 @@ rather than summing deltas. Embeddings never stream (no provider offers it) and 
   upload + reference-by-id + poll/webhook lifecycles are a different protocol shape than
   synchronous chat, and imply tracking an object that outlives any single request — no such
   concept exists in the schema today.
-- **Image generation and audio (transcription/speech) APIs** — a different billable unit
-  (per-image, per-second) than the token-based `prompt_tokens`/`completion_tokens`/`cost` shape
-  every other endpoint here shares; wiring these in needs its own usage-row design, not just
-  another adapter module.
+- **OpenAI image edits/variations** — unlike generation, these take a file upload
+  (`multipart/form-data`), a genuinely different request shape than every other endpoint here (all
+  JSON bodies) — deliberately out of scope for now; generation (`/v1/images/generations`, text ->
+  image) is proxied.
+- **Audio (transcription/speech) APIs** — a different billable unit (per-second/per-character)
+  than the token-based `prompt_tokens`/`completion_tokens`/`cost` shape every other endpoint here
+  shares, and transcription also takes a file upload like image edits do.
 - **Anthropic embeddings** — Anthropic has no embeddings API of its own; their docs point
   integrators at a third party (Voyage AI). Nothing to proxy.
 - **Gemini's Interactions API, and its stateful/background modes in particular** (`store:true`
@@ -483,8 +504,9 @@ rather than summing deltas. Embeddings never stream (no provider offers it) and 
 
 ## Future improvements
 
-Image / audio APIs (Phase 3 continued) · production-hardening pass — reliability, rate limiting,
-observability, security, cost accuracy, scalability, database hardening, CI/CD,
-production-readiness review · Gemini built-in tools (code execution, Search grounding) test
-coverage · per-model budgets · webhook/Slack alerts · usage-anomaly detection · exact-match
-response cache · Redis for shared rate-limit / budget counters · SSO / org hierarchy.
+Audio (transcription/speech) APIs, OpenAI image edits/variations (Phase 3 continued) ·
+production-hardening pass — reliability, rate limiting, observability, security, cost accuracy,
+scalability, database hardening, CI/CD, production-readiness review · Gemini built-in tools (code
+execution, Search grounding) test coverage · per-model budgets · webhook/Slack alerts ·
+usage-anomaly detection · exact-match response cache · Redis for shared rate-limit / budget
+counters · SSO / org hierarchy.

@@ -176,6 +176,20 @@ def mock_provider(monkeypatch):
                 "model": json_body.get("model"),
                 "usage": {"prompt_tokens": 5 * n_inputs, "total_tokens": 5 * n_inputs},
             }
+        if url.endswith("/images/generations"):
+            n_images = int(json_body.get("n") or 1)
+            resp = {
+                "created": 1700000000,
+                "data": [{"b64_json": "ZmFrZQ=="} for _ in range(n_images)],
+            }
+            if json_body.get("model") == "gpt-image-1":
+                resp["usage"] = {
+                    "input_tokens": 15,
+                    "input_tokens_details": {"text_tokens": 15, "image_tokens": 0},
+                    "output_tokens": 1290,
+                    "total_tokens": 1305,
+                }
+            return resp
         if ":embedContent" in url:
             return {
                 "embedding": {"values": [0.1, 0.2, 0.3]},

@@ -58,6 +58,7 @@ def test_native_endpoints_never_leak_the_provider_credential(client, make_live_k
             {"model": "openai/gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
             _bearer(k["key"]),
         ),
+        ("/v1/images/generations", {"model": "dall-e-3", "prompt": "a cat"}, _bearer(k["key"])),
     ]
     for path, body, headers in checks:
         r = client.post(path, json=body, headers=headers)

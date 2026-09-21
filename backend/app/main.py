@@ -16,6 +16,7 @@ from app.routers import (
     auth,
     embeddings,
     gemini,
+    images,
     keys,
     messages,
     openai_compat,
@@ -98,6 +99,7 @@ app.include_router(openai_compat.router)
 app.include_router(messages.router)
 app.include_router(responses.router)
 app.include_router(embeddings.router)
+app.include_router(images.router)
 app.include_router(gemini.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)
