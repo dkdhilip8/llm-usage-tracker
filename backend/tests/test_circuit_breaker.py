@@ -109,6 +109,14 @@ def test_repeated_upstream_5xx_opens_the_breaker_then_503s(client, make_live_key
 
 
 def test_repeated_upstream_4xx_never_opens_the_breaker(client, make_live_key, monkeypatch):
+    """A 4xx is this request's own fault (bad params, bad key, rate limit) —
+    not the provider being down — so it must never move the breaker at all,
+    not even partially. Proven two ways: (1) breaker_status() never even
+    gains an entry for the provider, checked after every single 4xx, not
+    just at the end; (2) a real call still succeeds immediately afterward
+    with zero special handling, proving the provider was never marked
+    unhealthy in the first place."""
+
     def boom(*a, **kw):
         raise _upstream_error(400)
 
@@ -120,8 +128,108 @@ def test_repeated_upstream_4xx_never_opens_the_breaker(client, make_live_key, mo
     for _ in range(p._BREAKER_THRESHOLD * 2):
         r = client.post("/v1/embeddings", json=body, headers=headers)
         assert r.status_code == 400  # never 503 — 4xx never counts against the breaker
+        assert "openai" not in p.breaker_status()  # not even a partial failure count
 
     assert p.breaker_allows("openai") is True
+
+    def succeed(url, headers, json_body, *, timeout=60.0):
+        return {"object": "list", "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}]}
+
+    monkeypatch.setattr("app.providers.send_request", succeed)
+    r = client.post("/v1/embeddings", json=body, headers=headers)
+    assert r.status_code == 200  # never gated — the breaker was never touched
+
+
+def test_full_state_machine_healthy_open_half_open_closed(client, make_live_key, monkeypatch):
+    """Walks the complete breaker lifecycle through the real HTTP surface, not
+    just isolated unit assertions on app.providers.breaker_*:
+
+        healthy
+          -> _BREAKER_THRESHOLD qualifying (upstream-fault) failures
+          -> OPEN
+          -> a request while OPEN gets a gateway 503 WITHOUT an upstream call
+          -> cooldown elapses
+          -> HALF-OPEN trial
+          -> success -> CLOSED (healthy again)
+    """
+    k = make_live_key(allowed_providers=["openai"])
+    body = {"model": "text-embedding-3-small", "input": "hi"}
+    headers = {"Authorization": f"Bearer {k['key']}"}
+
+    # --- healthy ---
+    assert p.breaker_allows("openai") is True
+    assert "openai" not in p.breaker_status()
+
+    # --- N qualifying upstream faults: real 500s from the (mocked) provider ---
+    def fail_500(*a, **kw):
+        raise _upstream_error(500)
+
+    monkeypatch.setattr("app.providers.send_request", fail_500)
+    for i in range(1, p._BREAKER_THRESHOLD + 1):
+        r = client.post("/v1/embeddings", json=body, headers=headers)
+        assert r.status_code == 500  # each one still gets the real upstream status (H1)
+        if i < p._BREAKER_THRESHOLD:
+            assert p.breaker_status()["openai"] == {"failures": i, "open": False}
+
+    # --- OPEN ---
+    assert p.breaker_status()["openai"]["open"] is True
+    assert p.breaker_allows("openai") is False
+
+    # --- a request while OPEN: gateway 503, WITHOUT ever attempting the upstream call ---
+    def must_not_be_called(*a, **kw):
+        raise AssertionError("send_request must not be called while the breaker is OPEN")
+
+    monkeypatch.setattr("app.providers.send_request", must_not_be_called)
+    r = client.post("/v1/embeddings", json=body, headers=headers)
+    assert r.status_code == 503
+    assert r.json()["detail"]["type"] == "provider_unavailable"
+
+    # --- cooldown elapses ---
+    real_time = p.time.time
+    monkeypatch.setattr(p.time, "time", lambda: real_time() + p._BREAKER_COOLDOWN_SECONDS + 1)
+    assert p.breaker_allows("openai") is True  # HALF-OPEN: one trial call now let through
+
+    # --- HALF-OPEN trial succeeds ---
+    def succeed(url, headers, json_body, *, timeout=60.0):
+        return {"object": "list", "data": [{"object": "embedding", "embedding": [0.1, 0.2], "index": 0}]}
+
+    monkeypatch.setattr("app.providers.send_request", succeed)
+    r = client.post("/v1/embeddings", json=body, headers=headers)
+    assert r.status_code == 200
+
+    # --- CLOSED (healthy again) ---
+    assert p.breaker_allows("openai") is True
+    assert "openai" not in p.breaker_status()
+
+
+def test_full_state_machine_half_open_trial_failure_reopens(client, make_live_key, monkeypatch):
+    """The other half-open branch: if the trial call itself fails again
+    (still an upstream fault), the breaker must re-open rather than close —
+    proves HALF-OPEN doesn't optimistically assume recovery."""
+    k = make_live_key(allowed_providers=["openai"])
+    body = {"model": "text-embedding-3-small", "input": "hi"}
+    headers = {"Authorization": f"Bearer {k['key']}"}
+
+    def fail_500(*a, **kw):
+        raise _upstream_error(500)
+
+    monkeypatch.setattr("app.providers.send_request", fail_500)
+    for _ in range(p._BREAKER_THRESHOLD):
+        client.post("/v1/embeddings", json=body, headers=headers)
+    assert p.breaker_allows("openai") is False  # OPEN
+
+    real_time = p.time.time
+    monkeypatch.setattr(p.time, "time", lambda: real_time() + p._BREAKER_COOLDOWN_SECONDS + 1)
+    assert p.breaker_allows("openai") is True  # HALF-OPEN
+
+    # the trial call fails too
+    r = client.post("/v1/embeddings", json=body, headers=headers)
+    assert r.status_code == 500
+
+    # re-opened: breaker_record_failure sets a fresh opened_at at the (fake)
+    # current time, so the cooldown restarts rather than being treated as
+    # already elapsed
+    assert p.breaker_allows("openai") is False
 
 
 def test_success_after_call_clears_the_breaker_state(client, make_live_key, mock_provider, monkeypatch):
