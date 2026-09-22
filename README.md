@@ -256,20 +256,21 @@ Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 |---|---|---|
 | `ENVIRONMENT` | `development` | Set to `production` (or `staging`) on a deployed host. The app then **refuses to start** on the dev-default `SECRET_KEY`, and warns if `ENCRYPTION_KEY` is left to derive from it. |
 | `DATABASE_URL` | local compose value | Postgres. `postgres://` / `postgresql://` auto-rewritten to the psycopg3 driver. |
+| `REDIS_URL` | `""` | Atomic, distributed rate limiting (`app/ratelimit.py`). Empty ⇒ every check uses the in-process fallback directly (a behavioral no-op vs. the pre-migration implementation). See "Reliability" below. |
 | `SECRET_KEY` | `dev-secret` | HMAC pepper for virtual-key hashing **and** session-cookie signing. Must be overridden when `ENVIRONMENT` is deployed. |
 | `ENCRYPTION_KEY` | `""` | Fernet key (urlsafe-base64, 32 bytes) encrypting each workspace's stored provider keys. Empty ⇒ derived from `SECRET_KEY`; set explicitly on a deployed host. |
 | `SESSION_TTL_HOURS` | `168` | Session-cookie lifetime. |
 | `ALLOW_SIGNUP` | `true` | Whether new accounts can be created. |
 | `MAX_USERS` | `300` | Signup refused past this many accounts (whole instance). |
-| `SIGNUPS_PER_IP_PER_HOUR` | `5` | In-process signup throttle per client IP. |
-| `JOINS_PER_IP_PER_HOUR` | `10` | In-process workspace-join throttle per client IP. |
+| `SIGNUPS_PER_IP_PER_HOUR` | `5` | Signup rate limit per client IP (Redis-backed, atomic — see `REDIS_URL`). |
+| `JOINS_PER_IP_PER_HOUR` | `10` | Workspace-join rate limit per client IP (Redis-backed, atomic). |
 | `MAX_WORKSPACES` | `200` | Create-workspace refused past this many. |
 | `MAX_MEMBERS_PER_WORKSPACE` | `25` | Join refused once a workspace is this full. |
 | `MAX_KEYS_PER_WORKSPACE` | `25` | Virtual-key cap per workspace. |
 | `MAX_OPEN_INVITES_PER_WORKSPACE` | `50` | Cap on un-consumed, un-expired invites. |
 | `INVITE_TTL_DAYS` | `14` | Invite code lifetime. |
 | `MAX_USAGE_ROWS_PER_WORKSPACE` | `20000` | The proxy stops recording once a workspace hits this. |
-| `PLAYGROUND_REQUESTS_PER_HOUR` | `120` | Per-workspace proxy rate limit. |
+| `PLAYGROUND_REQUESTS_PER_HOUR` | `120` | Per-workspace proxy rate limit (Redis-backed, atomic). |
 | `MAX_MODEL_PRICING_PER_WORKSPACE` | `100` | Cap on a workspace's own model-pricing override entries. |
 | `ALLOW_LIVE_KEYS` | `true` | Let a Workspace Admin attach the workspace's own provider key. |
 | `LIVE_CAP_DEFAULT_USD` | `5` | Default monthly live-spend cap for a provider with no explicit cap. Any non-negative per-provider value, no ceiling. |
@@ -532,18 +533,19 @@ whose token counts are always 0 would silently compute a wrong near-zero cost �
 honest built-in duration/character rate that row should keep using instead. Extending the registry
 itself to cover non-token billing is real future work, not something this phase forces in.
 
-### Reliability: connection pooling + circuit breaker
+### Reliability: connection pooling, circuit breaker, atomic rate limiting
 
 Phase 4 (production reliability, started after Phase 3's provider-feature surface was judged
-essentially complete): two changes to `app/providers.py`, the one chokepoint every adapter and the
-legacy `call_provider`/`stream_openai_compatible` path funnels through.
+essentially complete).
 
-**Connection pooling.** `send_request`/`send_request_binary`/`send_multipart`/`stream_request`/
-`check_key`/`check_liveness` used to each construct their own `httpx.Client`/call `httpx.post`
-directly — a fresh TCP+TLS handshake per outbound call, even to the same provider host repeatedly.
-They now share one process-lifetime `httpx.Client` (`providers.get_client()`, closed from
-`main.py`'s `lifespan` shutdown via `providers.close_client()`), so keep-alive connection reuse
-actually applies across calls, not just within one.
+**Connection pooling.** `app/providers.py`'s `send_request`/`send_request_binary`/`send_multipart`/
+`stream_request`/`check_key`/`check_liveness` — the one chokepoint every adapter and the legacy
+`call_provider`/`stream_openai_compatible` path funnels through — used to each construct their own
+`httpx.Client`/call `httpx.post` directly: a fresh TCP+TLS handshake per outbound call, even to the
+same provider host repeatedly. They now share one process-lifetime `httpx.Client`
+(`providers.get_client()`, closed from `main.py`'s `lifespan` shutdown via
+`providers.close_client()`), so keep-alive connection reuse actually applies across calls, not just
+within one.
 
 **Circuit breaker.** `providers.breaker_allows`/`breaker_record_success`/`breaker_record_failure`
 track consecutive failures per provider (`_BREAKER_THRESHOLD = 5`); once tripped, the breaker opens
@@ -554,12 +556,58 @@ reached the provider) or the provider's own 5xx — reusing the exact same disti
 passthrough work already draws at every call site; a 4xx (bad request, bad key, rate limit — this
 request's fault, not the provider being down) never counts. A success resets the count; after the
 cooldown, one trial call is let through (half-open) and either closes the breaker again or reopens
-it. Observable via `GET /api/providers` (`breaker_open`/`breaker_failures` per provider).
+it. Observable via `GET /api/providers` (`breaker_open`/`breaker_failures` per provider). Still
+process-local state — correct for today's single-instance deployment, not yet shared across
+multiple instances (see the rate limiter below for what that migration looks like when it's this
+one's turn).
 
-Same process-local caveat as the existing in-memory rate limiter and liveness cache: correct for
-this app's current single-process deployment (the Dockerfile's `CMD` runs bare `uvicorn`, no
-`--workers`), not yet shared across multiple instances/processes — a future horizontal-scale pass
-would need this state (and the rate limiter's) moved to Redis, same as noted below.
+**Atomic, distributed rate limiting (`app/ratelimit.py`).** The audit's H2. Three previously
+separate in-process `dict[key, deque[float]]` sliding-window logs — signups/hour per IP
+(`routers/auth.py`), workspace joins/hour per IP (`routers/workspace.py`), and Playground/proxy
+requests/hour per workspace (`gateway.enforce_workspace_quota`'s rate-limit half) — are now one
+shared module backed by Redis, atomic via a Lua script (`EVAL`): `ZREMRANGEBYSCORE` to evict hits
+older than the window, `ZCARD` to count what's left, and a conditional `ZADD` — all inside one
+script, so nothing else can execute between the read and the write. That closes a real race the
+prior implementation had once traffic is ever split across more than one process (today's single
+`uvicorn`, no `--workers` deployment doesn't hit it, in the same way the circuit breaker above
+doesn't yet either — this is the first of that class of state to actually make the move). It's a
+genuine sliding-window log, not a fixed/bucketed counter, so it can't be gamed by a burst
+straddling a window boundary — same semantics as the prior deque implementation, just made atomic
+and shared. Every call site passes its own fully-qualified, isolated key (`"signup:1.2.3.4"`,
+`"join:1.2.3.4"`, `"playground:workspace:42"`) — one Redis sorted set per identity, no cross-tenant
+aggregation.
+
+This module is deliberately **not** a general-purpose "limiter" merged with spend control. A rate
+limit answers "how many requests can this identity make in a window" (abuse/DoS protection); a
+budget answers "how much money can this key/workspace spend." `gateway.enforce_budget` (a per-key
+`$` cap) and `gateway.enforce_workspace_cap` (a per-workspace-per-provider `$` cap) stay exactly as
+they are — Postgres-backed, SUM-based, already durable and already correct regardless of Redis —
+and `enforce_workspace_quota`'s *other* half (`MAX_USAGE_ROWS_PER_WORKSPACE`, a permanent all-time
+row-count cap, no time window at all) stays a Postgres `COUNT` too. None of the three dollar/count
+concepts moved; only the actual request-rate checks did.
+
+**The failure-mode decision this module exists to make explicit**, rather than leaving implicit:
+Redis unreachable → **fail open, with the exact prior in-process sliding-window log engaged as a
+same-shape fallback** (never "skip the check entirely", and never fail closed). The reasoning:
+these three limiters protect against abuse, not against uncontrolled spend — spend is entirely
+Postgres-backed and completely unaffected by Redis's availability, so a Redis outage can *never*
+let a workspace spend past its cap. That makes fail-open the safe choice here; it would not be if
+this module gated spend. Fail-closed would instead turn an optional scaling dependency into a hard
+availability dependency for signup / workspace-join / the Playground — a worse outage than the one
+being guarded against. The fallback engaging is logged (rate-limited to one warning per 30s so a
+sustained outage doesn't spam logs), and a short backoff (`_REDIS_RETRY_COOLDOWN_SECONDS = 5`) keeps
+a bad Redis from being re-attempted on every single call — worth calling out concretely: a DNS-level
+failure (an unresolvable host) isn't bounded by the client's own socket-connect timeout the way a
+refused-connection is (measured at ~2s in this environment vs. the configured 200ms), so without the
+backoff, every request during that kind of outage would individually pay that penalty rather than
+falling back instantly after the first one discovers it.
+
+`REDIS_URL` is empty by default, which routes every check straight to the in-process fallback with
+no connection attempted at all — i.e. deploying this code with no Redis configured is a behavioral
+no-op, identical to the pre-migration implementation. `docker-compose.yml` runs a local `redis:7-
+alpine` service for development; production needs `REDIS_URL` pointing at a real (or
+Render-managed Key Value) instance to actually get the distributed, atomic behavior instead of the
+single-instance fallback.
 
 ### What's not proxied (and why)
 
@@ -604,8 +652,8 @@ would need this state (and the rate limiter's) moved to Redis, same as noted bel
 
 OpenAI image edits/variations, audio translations, duration/character rates in the model pricing
 registry (Phase 3 continued, all documented limitations above) · Phase 4 reliability continued —
-Redis-backed atomic rate limiting/budget counters (moves the in-memory rate limiter and the
-circuit breaker/liveness cache above off process-local state), an explicit idempotency strategy,
-deployment/drift monitoring, CI/CD actually running in the repo, reliability/failure testing ·
-Gemini built-in tools (code execution, Search grounding) test coverage · per-model budgets ·
-webhook/Slack alerts · usage-anomaly detection · exact-match response cache · SSO / org hierarchy.
+moving the circuit breaker/liveness cache above off process-local state now that the rate limiter
+has shown the pattern, an explicit idempotency strategy, deployment/drift monitoring, CI/CD
+actually running in the repo, reliability/failure testing · Gemini built-in tools (code execution,
+Search grounding) test coverage · per-model budgets · webhook/Slack alerts · usage-anomaly
+detection · exact-match response cache · SSO / org hierarchy.

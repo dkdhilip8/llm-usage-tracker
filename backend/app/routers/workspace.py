@@ -6,8 +6,6 @@ provider status are Workspace Admin only; a Team Member only ever gets
 ``{id, name, role}``.
 """
 
-import time
-from collections import defaultdict, deque
 from datetime import UTC, datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -15,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from app import providers
+from app import providers, ratelimit
 from app.config import settings
 from app.crypto import encrypt
 from app.db import get_db
@@ -43,18 +41,10 @@ from app.workspace import (
 
 router = APIRouter(prefix="/api/workspace", tags=["workspace"])
 
-# in-process per-IP join throttle (best-effort, single instance)
-_joins: dict[str, deque[float]] = defaultdict(deque)
-
 
 def _throttle_join(ip: str) -> None:
-    now = time.time()
-    q = _joins[ip]
-    while q and now - q[0] > 3600:
-        q.popleft()
-    if len(q) >= settings.JOINS_PER_IP_PER_HOUR:
+    if not ratelimit.allow(f"join:{ip}", limit=settings.JOINS_PER_IP_PER_HOUR, window_seconds=3600):
         raise HTTPException(429, "too many join attempts from this address — try later")
-    q.append(now)
 
 
 # ---- bodies ----

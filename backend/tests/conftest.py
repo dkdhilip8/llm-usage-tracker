@@ -25,6 +25,13 @@ _TEST_DB = os.environ.get(
 )
 os.environ["DATABASE_URL"] = _TEST_DB
 
+# A separate logical DB (index 1) from local dev's default (index 0), so a
+# developer running the app and the test suite against the same Redis
+# instance never cross-contaminate. Tests that want to prove atomicity
+# against the fallback instead (not real Redis) monkeypatch REDIS_URL to ""
+# for that one test.
+os.environ["REDIS_URL"] = os.environ.get("TEST_REDIS_URL", "redis://localhost:6379/1")
+
 import pytest  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.engine.url import make_url  # noqa: E402
@@ -65,6 +72,7 @@ def _schema():
 @pytest.fixture(autouse=True)
 def _clean_tables():
     from app import providers as _p
+    from app import ratelimit as _rl
 
     with SessionLocal() as s:
         s.execute(
@@ -77,13 +85,7 @@ def _clean_tables():
         s.commit()
     _p._cache.clear()
     _p._breaker.clear()
-    from app.gateway import _pg_hits
-    from app.routers.auth import _signups
-    from app.routers.workspace import _joins
-
-    _pg_hits.clear()
-    _signups.clear()
-    _joins.clear()
+    _rl.reset_for_tests()
     yield
 
 

@@ -51,6 +51,12 @@ class Settings(BaseSettings):
     # rewrites the scheme to the psycopg3 driver.
     DATABASE_URL: str = "postgresql+psycopg://llm:llm@localhost:5432/llmtracker"
 
+    # Redis, for atomic/distributed rate limiting (app/ratelimit.py). Empty => every
+    # rate-limit check uses the in-process fallback directly (correct for today's
+    # single-instance deployment; see ratelimit.py's module docstring for the
+    # fail-open-with-local-fallback design once this is set and later unreachable).
+    REDIS_URL: str = ""
+
     # HMAC pepper for virtual-key hashing + session-cookie signing. Never stored
     # alongside the hash.
     SECRET_KEY: str = "dev-secret"
@@ -71,7 +77,7 @@ class Settings(BaseSettings):
     # Off by default — request bodies can contain sensitive data.
     LOG_BODIES: bool = False
 
-    VERSION: str = "0.18.0"
+    VERSION: str = "0.19.0"
 
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":

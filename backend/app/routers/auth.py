@@ -1,14 +1,12 @@
 """Auth: signup + login, session cookie, logout, and `/me`. Username + password —
 no email, no password reset yet."""
 
-import time
-from collections import defaultdict, deque
-
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app import ratelimit
 from app.config import settings
 from app.db import get_db
 from app.models import User, Workspace
@@ -24,9 +22,6 @@ from app.security import (
 _USERNAME_RE = r"^[A-Za-z0-9](?:[A-Za-z0-9._-]{1,30}[A-Za-z0-9])$"
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
-
-# in-process signup throttle (per client IP) — best-effort, single instance
-_signups: dict[str, deque[float]] = defaultdict(deque)
 
 
 class Credentials(BaseModel):
@@ -74,13 +69,8 @@ def _me(db: Session, user: User | None) -> dict:
 
 
 def _throttle_signup(ip: str) -> None:
-    now = time.time()
-    q = _signups[ip]
-    while q and now - q[0] > 3600:
-        q.popleft()
-    if len(q) >= settings.SIGNUPS_PER_IP_PER_HOUR:
+    if not ratelimit.allow(f"signup:{ip}", limit=settings.SIGNUPS_PER_IP_PER_HOUR, window_seconds=3600):
         raise HTTPException(429, "too many signups from this address — try later")
-    q.append(now)
 
 
 @router.post("/signup")

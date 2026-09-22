@@ -7,7 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
-from app import providers
+from app import providers, ratelimit
 from app.config import settings
 from app.db import Base, SessionLocal, engine
 from app.gateway import UpstreamHTTPError
@@ -57,6 +57,7 @@ async def lifespan(_: FastAPI):
     providers.warm_cache()  # best-effort liveness check for any configured provider
     yield
     providers.close_client()
+    ratelimit.close_client()
 
 
 app = FastAPI(

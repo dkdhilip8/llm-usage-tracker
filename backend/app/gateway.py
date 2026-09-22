@@ -8,7 +8,6 @@ hits a real provider or returns an error."""
 
 import json
 import time
-from collections import defaultdict, deque
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,7 +18,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import providers
+from app import providers, ratelimit
 from app.adapters.base import UsageInfo
 from app.config import settings
 from app.db import SessionLocal
@@ -49,18 +48,20 @@ class UpstreamHTTPError(Exception):
         super().__init__(f"upstream returned HTTP {status_code}")
 
 
-# in-process per-workspace Playground rate limiter (best-effort, single instance)
-_pg_hits: dict[int, deque[float]] = defaultdict(deque)
-
-
 def enforce_workspace_quota(db: Session, vk: VirtualKey) -> None:
-    """Per-workspace request-rate + stored-row caps. Applies to every workspace."""
+    """Per-workspace request-rate limit (Redis-backed, atomic — see
+    app.ratelimit) + a permanent, Postgres-backed stored-row cap. These are
+    two unrelated checks sharing this function for historical reasons: the
+    rate limit answers "how many requests this hour", the row cap answers
+    "how much data has this workspace ever stored" (no time window at all).
+    Neither is a dollar/budget check — see enforce_budget/enforce_workspace_cap
+    below for that. Applies to every workspace."""
     ws_id = vk.workspace_id
-    now = time.time()
-    q = _pg_hits[ws_id]
-    while q and now - q[0] > 3600:
-        q.popleft()
-    if len(q) >= settings.PLAYGROUND_REQUESTS_PER_HOUR:
+    if not ratelimit.allow(
+        f"playground:workspace:{ws_id}",
+        limit=settings.PLAYGROUND_REQUESTS_PER_HOUR,
+        window_seconds=3600,
+    ):
         raise HTTPException(
             status_code=429,
             detail={
@@ -88,7 +89,6 @@ def enforce_workspace_quota(db: Session, vk: VirtualKey) -> None:
                 "type": "quota_exceeded",
             },
         )
-    q.append(now)
 
 
 @dataclass
