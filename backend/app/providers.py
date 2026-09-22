@@ -1,4 +1,5 @@
-"""Provider credentials, liveness checks (cached), and real upstream calls.
+"""Provider credentials, liveness checks (cached), a per-provider circuit
+breaker, and real upstream calls.
 
 A server env var configures a provider instance-wide (usable by every workspace);
 a workspace can also attach its own key (resolved in gateway.live_key_for). Every
@@ -44,15 +45,45 @@ _CHAT_URLS = {
 _cache: dict[str, tuple[bool, float]] = {}
 
 
+# ---- shared outbound HTTP client (connection pooling) ----
+# One long-lived httpx.Client for the process, instead of a fresh connection
+# (and, for send_request/send_request_binary/send_multipart, a fresh
+# httpx.post() call each spins up and tears down its own transport) per
+# request — real keep-alive reuse to the same host now applies across calls,
+# not just within one. Created lazily, closed from app.main's lifespan on
+# shutdown. This is process-local state, same caveat as the in-memory rate
+# limiter and liveness cache below: correct for this app's current
+# single-process deployment (see the Dockerfile's CMD — no --workers), not
+# yet shared across multiple instances/processes.
+_client: httpx.Client | None = None
+
+
+def get_client() -> httpx.Client:
+    global _client
+    if _client is None:
+        _client = httpx.Client()
+    return _client
+
+
+def close_client() -> None:
+    """Called once from app.main's lifespan shutdown. Safe to call even if
+    get_client() was never invoked (e.g. a test run that never made a real
+    call)."""
+    global _client
+    if _client is not None:
+        _client.close()
+        _client = None
+
+
 # ---- the one chokepoint for outbound provider HTTP calls ----
 # Every adapter (app/adapters/*) and the legacy call_provider/stream_openai_compatible
-# below funnel through these two functions. Tests monkeypatch these (or the
+# below funnel through these functions. Tests monkeypatch these (or the
 # higher-level functions that call them) to avoid any real network call.
 def send_request(url: str, headers: dict, json_body: dict, *, timeout: float = 60.0) -> dict:
     """One blocking POST, parsed JSON response. Raises httpx.HTTPStatusError (via
     raise_for_status) or a transport error on failure — callers turn that into a
     502 upstream_error."""
-    r = httpx.post(url, headers=headers, json=json_body, timeout=timeout)
+    r = get_client().post(url, headers=headers, json=json_body, timeout=timeout)
     r.raise_for_status()
     return r.json()
 
@@ -68,15 +99,13 @@ def stream_request(
 
     On a real HTTP error status, the (usually short, JSON) error body is read
     before `raise_for_status()` — a streaming response's body isn't available
-    on the exception otherwise, and the connection closes with the `with`
-    block. Callers that want the provider's real status+body (not just a
-    generic failure) read it off `exc.response`."""
-    with httpx.Client(timeout=timeout) as client:
-        with client.stream("POST", url, headers=headers, json=json_body) as r:
-            if r.is_error:
-                r.read()
-            r.raise_for_status()
-            yield from r.iter_lines()
+    on the exception otherwise. Callers that want the provider's real
+    status+body (not just a generic failure) read it off `exc.response`."""
+    with get_client().stream("POST", url, headers=headers, json=json_body, timeout=timeout) as r:
+        if r.is_error:
+            r.read()
+        r.raise_for_status()
+        yield from r.iter_lines()
 
 
 def send_request_binary(
@@ -86,9 +115,9 @@ def send_request_binary(
     (OpenAI's TTS returns raw audio bytes) — returns (content, content_type)
     untouched rather than trying to .json() it. Raises httpx.HTTPStatusError
     on a real error status (same as send_request; the response is already
-    fully buffered by a non-streaming httpx.post, so exc.response.content is
+    fully buffered by a non-streaming POST, so exc.response.content is
     available to the caller without any extra read)."""
-    r = httpx.post(url, headers=headers, json=json_body, timeout=timeout)
+    r = get_client().post(url, headers=headers, json=json_body, timeout=timeout)
     r.raise_for_status()
     return r.content, r.headers.get("content-type", "application/octet-stream")
 
@@ -104,7 +133,7 @@ def send_multipart(
     parsed JSON: a transcription's response_format can be plain text/srt/vtt,
     not just JSON, so parsing here would be wrong as often as it's right —
     the caller decides how to interpret the bytes."""
-    r = httpx.post(url, headers=headers, data=data, files=files, timeout=timeout)
+    r = get_client().post(url, headers=headers, data=data, files=files, timeout=timeout)
     r.raise_for_status()
     return r.content, r.headers.get("content-type", "application/octet-stream")
 
@@ -136,7 +165,7 @@ def check_key(provider: str, api_key: str) -> bool:
     if not api_key:
         return False
     try:
-        resp = httpx.get(
+        resp = get_client().get(
             _LIVENESS_URLS[provider], headers=_auth_headers(provider, api_key), timeout=8.0
         )
         return resp.status_code == 200
@@ -155,7 +184,7 @@ def check_liveness(provider: str, *, force: bool = False) -> bool:
         return cached[0]
     valid = False
     try:
-        resp = httpx.get(
+        resp = get_client().get(
             _LIVENESS_URLS[provider], headers=_auth_headers(provider), timeout=8.0
         )
         valid = resp.status_code == 200
@@ -198,6 +227,62 @@ def warm_cache() -> None:
                 check_liveness(provider, force=True)
             except Exception:
                 pass
+
+
+# ---- circuit breaker ----
+# A provider having a bad moment shouldn't mean every request to it pays the
+# full timeout before failing — after enough consecutive upstream-fault
+# failures, fail fast for a cool-down period instead of attempting the real
+# call. "Upstream fault" means a transport failure (never reached the
+# provider) or the provider's own 5xx (their overload/outage, not our
+# request) — a 4xx never counts, since that's this specific request being
+# wrong (bad params, bad key, rate limited), not the provider being down.
+# gateway.require_live_ready checks breaker_allows() as the final gate
+# before a live call; gateway's run_completion/run_native_completion/
+# run_native_completion_raw/stream_native_passthrough record the outcome
+# via breaker_record_success/_failure in the same except blocks that
+# already distinguish HTTPStatusError from a transport failure (the H1
+# work). Same process-local caveat as the rate limiter and liveness cache.
+_BREAKER_THRESHOLD = 5  # consecutive upstream-fault failures before opening
+_BREAKER_COOLDOWN_SECONDS = 30.0
+
+_breaker: dict[str, dict] = {}  # provider -> {"failures": int, "opened_at": float | None}
+
+
+def breaker_allows(provider: str) -> bool:
+    """False when this provider's circuit is open and still cooling down."""
+    state = _breaker.get(provider)
+    if not state or state["opened_at"] is None:
+        return True
+    if time.time() - state["opened_at"] >= _BREAKER_COOLDOWN_SECONDS:
+        return True  # cooldown elapsed -> let one trial call through (half-open)
+    return False
+
+
+def breaker_record_success(provider: str) -> None:
+    _breaker.pop(provider, None)
+
+
+def breaker_record_failure(provider: str, *, is_upstream_fault: bool) -> None:
+    if not is_upstream_fault:
+        return
+    state = _breaker.setdefault(provider, {"failures": 0, "opened_at": None})
+    state["failures"] += 1
+    if state["failures"] >= _BREAKER_THRESHOLD:
+        state["opened_at"] = time.time()
+
+
+def breaker_status() -> dict[str, dict]:
+    """For observability (GET /api/providers)."""
+    now = time.time()
+    out = {}
+    for provider, state in _breaker.items():
+        opened_at = state["opened_at"]
+        out[provider] = {
+            "failures": state["failures"],
+            "open": opened_at is not None and now - opened_at < _BREAKER_COOLDOWN_SECONDS,
+        }
+    return out
 
 
 # ---- real upstream calls ----

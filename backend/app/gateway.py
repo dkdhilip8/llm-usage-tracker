@@ -341,6 +341,18 @@ def require_live_ready(db: Session, vk: VirtualKey, provider: str) -> str:
                 "code": "402",
             },
         )
+    if not providers.breaker_allows(provider):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": (
+                    f"{provider} is temporarily unavailable — too many recent "
+                    "upstream failures, retry shortly"
+                ),
+                "type": "provider_unavailable",
+                "code": "503",
+            },
+        )
     return key
 
 
@@ -407,6 +419,7 @@ def run_completion(
         # real status instead of a blanket 502).
         latency_ms = int((time.perf_counter() - t0) * 1000)
         status_code = exc.response.status_code
+        providers.breaker_record_failure(provider, is_upstream_fault=status_code >= 500)
         failed = CompletionResult(
             f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
         )
@@ -423,6 +436,7 @@ def run_completion(
         # a transport failure (DNS, timeout, connection refused, ...) — we
         # never reached the provider, so 502 (our own failure) is honest.
         latency_ms = int((time.perf_counter() - t0) * 1000)
+        providers.breaker_record_failure(provider, is_upstream_fault=True)
         failed = CompletionResult(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
         )
@@ -435,6 +449,7 @@ def run_completion(
                 "code": "502",
             },
         ) from exc
+    providers.breaker_record_success(provider)
     latency_ms = int((time.perf_counter() - t0) * 1000)
     cost, cost_source = _cost_and_source(actual_cost, provider, model, pt, ct)
 
@@ -470,6 +485,7 @@ def run_native_completion(
         # gateway sees the same error it would calling the provider directly.
         latency_ms = int((time.perf_counter() - t0) * 1000)
         status_code = exc.response.status_code
+        providers.breaker_record_failure(provider, is_upstream_fault=status_code >= 500)
         failed = CompletionResult(
             f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
         )
@@ -481,6 +497,7 @@ def run_native_completion(
         # a transport failure (DNS, timeout, connection refused, ...) — we
         # never reached the provider, so 502 (our own failure) is honest.
         latency_ms = int((time.perf_counter() - t0) * 1000)
+        providers.breaker_record_failure(provider, is_upstream_fault=True)
         failed = CompletionResult(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
         )
@@ -493,6 +510,7 @@ def run_native_completion(
                 "code": "502",
             },
         ) from exc
+    providers.breaker_record_success(provider)
     latency_ms = int((time.perf_counter() - t0) * 1000)
     usage = extract_usage_fn(response)
     result = completion_result_from_usage(
@@ -529,6 +547,7 @@ def run_native_completion_raw(
     except httpx.HTTPStatusError as exc:
         latency_ms = int((time.perf_counter() - t0) * 1000)
         status_code = exc.response.status_code
+        providers.breaker_record_failure(provider, is_upstream_fault=status_code >= 500)
         failed = CompletionResult(
             f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
         )
@@ -538,6 +557,7 @@ def run_native_completion_raw(
         ) from exc
     except Exception as exc:
         latency_ms = int((time.perf_counter() - t0) * 1000)
+        providers.breaker_record_failure(provider, is_upstream_fault=True)
         failed = CompletionResult(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
         )
@@ -550,6 +570,7 @@ def run_native_completion_raw(
                 "code": "502",
             },
         ) from exc
+    providers.breaker_record_success(provider)
     latency_ms = int((time.perf_counter() - t0) * 1000)
     usage = extract_usage_fn(content, content_type)
     text = preview_fn(content, content_type) if preview_fn else ""
@@ -593,6 +614,7 @@ def stream_native_passthrough(
     except httpx.HTTPStatusError as exc:
         status = "error"
         status_code = exc.response.status_code
+        providers.breaker_record_failure(provider, is_upstream_fault=status_code >= 500)
         note = json.dumps(
             {
                 "type": "error",
@@ -605,8 +627,11 @@ def stream_native_passthrough(
         yield f"event: error\ndata: {note}\n\n"
     except Exception as exc:  # noqa: BLE001 — headers are already sent; surface in-band
         status = "error"
+        providers.breaker_record_failure(provider, is_upstream_fault=True)
         note = json.dumps({"type": "error", "error": {"message": f"{provider} call failed: {exc}"}})
         yield f"event: error\ndata: {note}\n\n"
+    else:
+        providers.breaker_record_success(provider)
     latency_ms = int((time.perf_counter() - t0) * 1000)
     result = completion_result_from_usage(acc.usage(), provider, model, latency_ms)
     record_usage_detached(vk_id, provider, model, prompt_preview, result, status=status)

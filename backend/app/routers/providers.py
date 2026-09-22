@@ -17,11 +17,14 @@ router = APIRouter(
 def list_providers() -> list[dict]:
     """Which providers are configured instance-wide via a server env var. Never
     returns key values."""
+    breaker = providers.breaker_status()
     return [
         {
             "provider": p,
             "env_var": providers.ENV_VARS[p],
             "configured_via_env": bool(settings.provider_api_key(p)),
+            "breaker_open": breaker.get(p, {}).get("open", False),
+            "breaker_failures": breaker.get(p, {}).get("failures", 0),
         }
         for p in providers.SUPPORTED
     ]

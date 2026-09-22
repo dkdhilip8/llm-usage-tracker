@@ -532,6 +532,35 @@ whose token counts are always 0 would silently compute a wrong near-zero cost �
 honest built-in duration/character rate that row should keep using instead. Extending the registry
 itself to cover non-token billing is real future work, not something this phase forces in.
 
+### Reliability: connection pooling + circuit breaker
+
+Phase 4 (production reliability, started after Phase 3's provider-feature surface was judged
+essentially complete): two changes to `app/providers.py`, the one chokepoint every adapter and the
+legacy `call_provider`/`stream_openai_compatible` path funnels through.
+
+**Connection pooling.** `send_request`/`send_request_binary`/`send_multipart`/`stream_request`/
+`check_key`/`check_liveness` used to each construct their own `httpx.Client`/call `httpx.post`
+directly — a fresh TCP+TLS handshake per outbound call, even to the same provider host repeatedly.
+They now share one process-lifetime `httpx.Client` (`providers.get_client()`, closed from
+`main.py`'s `lifespan` shutdown via `providers.close_client()`), so keep-alive connection reuse
+actually applies across calls, not just within one.
+
+**Circuit breaker.** `providers.breaker_allows`/`breaker_record_success`/`breaker_record_failure`
+track consecutive failures per provider (`_BREAKER_THRESHOLD = 5`); once tripped, the breaker opens
+for `_BREAKER_COOLDOWN_SECONDS = 30`, and `gateway.require_live_ready` fails fast with `503
+provider_unavailable` instead of attempting (and paying the full timeout for) a call that's likely
+to fail again. Only an "upstream fault" counts against the breaker — a transport failure (never
+reached the provider) or the provider's own 5xx — reusing the exact same distinction the H1 error-
+passthrough work already draws at every call site; a 4xx (bad request, bad key, rate limit — this
+request's fault, not the provider being down) never counts. A success resets the count; after the
+cooldown, one trial call is let through (half-open) and either closes the breaker again or reopens
+it. Observable via `GET /api/providers` (`breaker_open`/`breaker_failures` per provider).
+
+Same process-local caveat as the existing in-memory rate limiter and liveness cache: correct for
+this app's current single-process deployment (the Dockerfile's `CMD` runs bare `uvicorn`, no
+`--workers`), not yet shared across multiple instances/processes — a future horizontal-scale pass
+would need this state (and the rate limiter's) moved to Redis, same as noted below.
+
 ### What's not proxied (and why)
 
 - **OpenAI Realtime / a future Gemini Live API** — WebSocket, not request/response. The whole
@@ -551,10 +580,15 @@ itself to cover non-token billing is real future work, not something this phase 
 - **A handful of transcription's rarer fields** (`timestamp_granularities`,
   `chunking_strategy`, `keywords`, speaker diarization) — the transcription route is deliberately
   a sync route with named `Form(...)` fields (`model`, `language`, `prompt`, `response_format`,
-  `temperature`), not a fully generic multipart pass-through, because reading a form generically
-  needs `async def` + `await request.form()`, and this codebase has no async routes anywhere else
-  — introducing one here would mean the route's own blocking DB/HTTP calls could stall the event
-  loop. Documented, not silently dropped.
+  `temperature`), not a fully generic multipart pass-through (which would need `async def` +
+  `await request.form()`, a shape no other route here uses). This is a scope choice, not a
+  concurrency workaround: every sync route already runs off FastAPI/Starlette's event loop, in
+  AnyIO's worker threadpool (default cap 40 threads per process) — it was never at risk of
+  stalling the event loop. The real, pre-existing constraint a long-running sync route shares with
+  every other endpoint here is threadpool + DB-connection-pool exhaustion under enough concurrent
+  slow requests (SQLAlchemy's default pool is 5 + 10 overflow, held for a request's full
+  lifecycle); Audio's ~sync multipart handling doesn't introduce that exposure, it just continues
+  it. Documented, not silently dropped.
 - **Anthropic embeddings** — Anthropic has no embeddings API of its own; their docs point
   integrators at a third party (Voyage AI). Nothing to proxy.
 - **Gemini's Interactions API, and its stateful/background modes in particular** (`store:true`
@@ -569,8 +603,9 @@ itself to cover non-token billing is real future work, not something this phase 
 ## Future improvements
 
 OpenAI image edits/variations, audio translations, duration/character rates in the model pricing
-registry (Phase 3 continued, all documented limitations above) · production-hardening pass —
-reliability, rate limiting, observability, security, cost accuracy, scalability, database
-hardening, CI/CD, production-readiness review · Gemini built-in tools (code execution, Search
-grounding) test coverage · per-model budgets · webhook/Slack alerts · usage-anomaly detection ·
-exact-match response cache · Redis for shared rate-limit / budget counters · SSO / org hierarchy.
+registry (Phase 3 continued, all documented limitations above) · Phase 4 reliability continued —
+Redis-backed atomic rate limiting/budget counters (moves the in-memory rate limiter and the
+circuit breaker/liveness cache above off process-local state), an explicit idempotency strategy,
+deployment/drift monitoring, CI/CD actually running in the repo, reliability/failure testing ·
+Gemini built-in tools (code execution, Search grounding) test coverage · per-model budgets ·
+webhook/Slack alerts · usage-anomaly detection · exact-match response cache · SSO / org hierarchy.

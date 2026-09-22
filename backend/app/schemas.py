@@ -86,6 +86,8 @@ class ProviderStatus(BaseModel):
     provider: str
     env_var: str
     configured_via_env: bool
+    breaker_open: bool
+    breaker_failures: int
 
 
 # ---- account (personal, workspace-agnostic) ----

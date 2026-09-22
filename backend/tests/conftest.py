@@ -76,6 +76,7 @@ def _clean_tables():
         )
         s.commit()
     _p._cache.clear()
+    _p._breaker.clear()
     from app.gateway import _pg_hits
     from app.routers.auth import _signups
     from app.routers.workspace import _joins

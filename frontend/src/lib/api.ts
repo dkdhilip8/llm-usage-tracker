@@ -34,6 +34,8 @@ export interface ProviderEnvStatus {
   provider: string;
   env_var: string;
   configured_via_env: boolean;
+  breaker_open: boolean;
+  breaker_failures: number;
 }
 
 export interface WorkspaceRef {

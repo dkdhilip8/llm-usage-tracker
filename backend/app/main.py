@@ -56,6 +56,7 @@ async def lifespan(_: FastAPI):
         bootstrap(db)  # schema migration
     providers.warm_cache()  # best-effort liveness check for any configured provider
     yield
+    providers.close_client()
 
 
 app = FastAPI(
