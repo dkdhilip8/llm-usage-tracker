@@ -24,7 +24,14 @@ from app.adapters.base import UsageInfo
 from app.config import settings
 from app.db import SessionLocal
 from app.models import ModelPricing, ProviderCredential, UsageLog, VirtualKey
-from app.pricing import PROVIDERS, Pricing, estimate_cost, price_for
+from app.pricing import (
+    PROVIDERS,
+    Pricing,
+    estimate_character_cost,
+    estimate_cost,
+    estimate_duration_cost,
+    price_for,
+)
 
 
 class UpstreamHTTPError(Exception):
@@ -97,6 +104,10 @@ class CompletionResult:
     # pricing_block() (called by callers AFTER record_usage) report the same
     # price that was actually used, not the built-in table's.
     price_override: Pricing | None = None
+    # Non-token billing dimensions (audio) — see adapters/base.py::UsageInfo.
+    # At most one of these is set; prompt_tokens/completion_tokens stay 0.
+    duration_seconds: float | None = None
+    characters: int | None = None
 
     @property
     def total_tokens(self) -> int:
@@ -340,13 +351,32 @@ def _cost_and_source(actual_cost: float | None, provider: str, model: str, pt: i
     return (est, "configured") if est is not None else (None, "unknown")
 
 
+def _cost_and_source_for_usage(usage: UsageInfo, provider: str, model: str) -> tuple[float | None, str]:
+    """Billing-unit-aware version of _cost_and_source, used only by
+    completion_result_from_usage (the native-adapter path). A real
+    provider-reported charge always wins regardless of unit. Otherwise: a
+    duration- or character-billed operation (audio) prices from its own
+    table — never from the token table, and never forced through it just
+    because prompt_tokens/completion_tokens happen to be 0."""
+    if usage.cost is not None:
+        return round(usage.cost, 6), "provider"
+    if usage.duration_seconds is not None:
+        est = estimate_duration_cost(provider, model, usage.duration_seconds)
+        return (est, "configured") if est is not None else (None, "unknown")
+    if usage.characters is not None:
+        est = estimate_character_cost(provider, model, usage.characters)
+        return (est, "configured") if est is not None else (None, "unknown")
+    return _cost_and_source(usage.cost, provider, model, usage.prompt_tokens, usage.completion_tokens)
+
+
 def completion_result_from_usage(
     usage: UsageInfo, provider: str, model: str, latency_ms: int, *, text: str = ""
 ) -> CompletionResult:
     """Turn an adapter's UsageInfo (pulled from a real provider response) into
     the CompletionResult record_usage expects, applying the same
-    provider-cost-wins-else-honest-estimate rule as the legacy call_provider path."""
-    cost, cost_source = _cost_and_source(usage.cost, provider, model, usage.prompt_tokens, usage.completion_tokens)
+    provider-cost-wins-else-honest-estimate rule as the legacy call_provider
+    path — generalized to whichever billing unit this usage actually reports."""
+    cost, cost_source = _cost_and_source_for_usage(usage, provider, model)
     return CompletionResult(
         text=text,
         prompt_tokens=usage.prompt_tokens,
@@ -355,6 +385,8 @@ def completion_result_from_usage(
         cost_source=cost_source,
         latency_ms=latency_ms,
         usage_raw=usage.raw or None,
+        duration_seconds=usage.duration_seconds,
+        characters=usage.characters,
     )
 
 
@@ -470,6 +502,62 @@ def run_native_completion(
     return response
 
 
+def run_native_completion_raw(
+    db: Session,
+    vk: VirtualKey,
+    provider: str,
+    model: str,
+    *,
+    call_fn: Callable[[str], tuple[bytes, str]],
+    extract_usage_fn: Callable[[bytes, str], UsageInfo],
+    preview_fn: Callable[[bytes, str], str] | None = None,
+    prompt_preview: str,
+    api_key: str,
+) -> tuple[bytes, str]:
+    """The binary/multipart counterpart of run_native_completion, for the
+    audio endpoints: a request that isn't a JSON body (transcription takes a
+    file upload) and/or a response that isn't JSON (TTS returns raw audio
+    bytes). Same governance/error/usage-recording contract — the router gets
+    back the provider's raw bytes and content-type, untouched, exactly as
+    run_native_completion hands back a raw dict for JSON endpoints.
+    `call_fn` takes only `api_key`; the router closes over everything else
+    (file bytes, form fields, or a JSON body) since there's no one shape to
+    generalize across transcription's multipart request and TTS's JSON one."""
+    t0 = time.perf_counter()
+    try:
+        content, content_type = call_fn(api_key)
+    except httpx.HTTPStatusError as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        status_code = exc.response.status_code
+        failed = CompletionResult(
+            f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
+        )
+        record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        raise UpstreamHTTPError(
+            status_code, exc.response.content, exc.response.headers.get("content-type")
+        ) from exc
+    except Exception as exc:
+        latency_ms = int((time.perf_counter() - t0) * 1000)
+        failed = CompletionResult(
+            f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
+        )
+        record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "message": f"{provider} call failed: {exc}",
+                "type": "upstream_error",
+                "code": "502",
+            },
+        ) from exc
+    latency_ms = int((time.perf_counter() - t0) * 1000)
+    usage = extract_usage_fn(content, content_type)
+    text = preview_fn(content, content_type) if preview_fn else ""
+    result = completion_result_from_usage(usage, provider, model, latency_ms, text=text)
+    record_usage(db, vk, provider, model, prompt_preview, result)
+    return content, content_type
+
+
 def stream_native_passthrough(
     vk_id: int,
     provider: str,
@@ -559,8 +647,16 @@ def record_usage(
     it takes precedence over the built-in/JSON "configured" table for this
     workspace's own cost. Mutates result.cost/cost_source/price_override in
     place so a caller reading them right after this call (a client-facing
-    response field) sees the same final number that gets persisted."""
-    if status == "success" and result.cost_source in ("configured", "unknown"):
+    response field) sees the same final number that gets persisted.
+
+    The override only applies to token-billed rows (model_pricing is a
+    token-rate registry — input_per_1m/output_per_1m — with no duration/
+    character equivalent yet). Applying a token rate to a duration- or
+    character-billed row would silently compute a near-zero cost from its
+    always-0 prompt_tokens/completion_tokens — worse than leaving it
+    "unknown" — so a row with either of those set is skipped here."""
+    is_token_billed = result.duration_seconds is None and result.characters is None
+    if is_token_billed and status == "success" and result.cost_source in ("configured", "unknown"):
         override = _workspace_price_override(db, vk.workspace_id, provider, model)
         if override is not None:
             result.cost = round(
@@ -581,6 +677,8 @@ def record_usage(
         cost=result.cost,
         cost_source=result.cost_source,
         usage_raw=result.usage_raw,
+        duration_seconds=result.duration_seconds,
+        characters=result.characters,
         simulated=False,
         mode="live",
         latency_ms=result.latency_ms,

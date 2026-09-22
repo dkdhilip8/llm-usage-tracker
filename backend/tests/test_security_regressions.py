@@ -108,3 +108,55 @@ def test_upstream_error_passthrough_never_leaks_the_provider_credential(client, 
     )
     assert r.status_code == 401
     _no_leak(r, ["sk-fake-openai-key-000000"], "/v1/embeddings (error path)")
+
+
+def test_transcription_never_leaks_the_provider_credential(client, make_live_key, mock_provider):
+    """Audio's multipart request shape is a new code path (send_multipart,
+    not send_request) — the generic checks loop above only covers JSON
+    bodies, so this gets its own test."""
+    import io
+
+    k = make_live_key(allowed_providers=["openai"])
+    r = client.post(
+        "/v1/audio/transcriptions",
+        headers=_bearer(k["key"]),
+        files={"file": ("clip.mp3", io.BytesIO(b"FAKE_MP3"), "audio/mpeg")},
+        data={"model": "whisper-1"},
+    )
+    assert r.status_code == 200
+    _no_leak(r, ["sk-fake-openai-key-000000"], "/v1/audio/transcriptions")
+
+
+def test_audio_error_paths_never_leak_the_provider_credential(client, make_live_key, monkeypatch):
+    """Both audio endpoints' error paths funnel through run_native_completion_raw
+    (a new code path from this phase) — prove neither relays our headers."""
+    import io
+
+    def boom(*a, **kw):
+        request = httpx.Request("POST", "https://example.test/x")
+        response = httpx.Response(
+            400, content=b'{"error":"bad request"}', headers={"content-type": "application/json"}, request=request
+        )
+        raise httpx.HTTPStatusError("HTTP 400", request=request, response=response)
+
+    k = make_live_key(allowed_providers=["openai"])
+    secrets = ["sk-fake-openai-key-000000"]
+
+    monkeypatch.setattr("app.providers.send_multipart", boom)
+    r = client.post(
+        "/v1/audio/transcriptions",
+        headers=_bearer(k["key"]),
+        files={"file": ("clip.mp3", io.BytesIO(b"FAKE_MP3"), "audio/mpeg")},
+        data={"model": "whisper-1"},
+    )
+    assert r.status_code == 400
+    _no_leak(r, secrets, "/v1/audio/transcriptions (error path)")
+
+    monkeypatch.setattr("app.providers.send_request_binary", boom)
+    r = client.post(
+        "/v1/audio/speech",
+        json={"model": "tts-1", "input": "hi", "voice": "alloy"},
+        headers=_bearer(k["key"]),
+    )
+    assert r.status_code == 400
+    _no_leak(r, secrets, "/v1/audio/speech (error path)")

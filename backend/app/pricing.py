@@ -84,6 +84,48 @@ def estimate_cost(
     return round(cost, 6)
 
 
+# ---- non-token billing dimensions (audio) ----
+# Every entry here is a verified, stable, single-rate price — never a blended
+# guess. A model whose real pricing doesn't fit a single rate (e.g. gpt-image-1
+# mixes text/image tokens at different rates; several newer audio models bill
+# by token, not duration/characters, and belong in CONFIGURED_PRICING instead
+# if registered at all) is deliberately left unregistered rather than forced
+# in here — estimate_duration_cost/estimate_character_cost then honestly
+# return None, same "unknown" rule as the token table above.
+DurationPricing = dict[str, float]  # {"per_minute": USD}
+CharacterPricing = dict[str, float]  # {"per_1m_chars": USD}
+
+CONFIGURED_DURATION_PRICING: dict[tuple[str, str], DurationPricing] = {
+    ("openai", "whisper-1"): {"per_minute": 0.006},
+}
+
+CONFIGURED_CHARACTER_PRICING: dict[tuple[str, str], CharacterPricing] = {
+    ("openai", "tts-1"): {"per_1m_chars": 15.0},
+}
+
+
+def duration_price_for(provider: str, model: str) -> DurationPricing | None:
+    return CONFIGURED_DURATION_PRICING.get((provider, model))
+
+
+def character_price_for(provider: str, model: str) -> CharacterPricing | None:
+    return CONFIGURED_CHARACTER_PRICING.get((provider, model))
+
+
+def estimate_duration_cost(provider: str, model: str, seconds: float) -> float | None:
+    p = duration_price_for(provider, model)
+    if p is None:
+        return None
+    return round(seconds / 60 * p["per_minute"], 6)
+
+
+def estimate_character_cost(provider: str, model: str, characters: int) -> float | None:
+    p = character_price_for(provider, model)
+    if p is None:
+        return None
+    return round(characters / 1_000_000 * p["per_1m_chars"], 6)
+
+
 def models_catalog() -> list[dict]:
     return [
         {

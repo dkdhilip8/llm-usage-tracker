@@ -219,6 +219,89 @@ def images_preview(response: dict) -> str:
     return f"{n} image(s)"
 
 
+# ---- Audio: transcription (multipart upload) + TTS (JSON in, raw audio out) ----
+_TRANSCRIPTIONS_URL = "https://api.openai.com/v1/audio/transcriptions"
+_SPEECH_URL = "https://api.openai.com/v1/audio/speech"
+
+
+def call_transcription(
+    file_bytes: bytes, filename: str, file_content_type: str, form_fields: dict, api_key: str
+) -> tuple[bytes, str]:
+    # no content-type header here — httpx sets the multipart boundary itself
+    # from `files`; a manually-set content-type would break it.
+    headers = {"Authorization": f"Bearer {api_key}"}
+    files = {"file": (filename, file_bytes, file_content_type or "application/octet-stream")}
+    data = {k: str(v) for k, v in form_fields.items() if v is not None}
+    return providers.send_multipart(_TRANSCRIPTIONS_URL, headers, data, files)
+
+
+def extract_transcription_usage(content: bytes, content_type: str) -> UsageInfo:
+    """The billing unit depends on the model — verified against OpenAI's
+    current API reference, not assumed: gpt-4o(-mini)-transcribe report a
+    token usage object (usage.type == "tokens"); whisper-1 reports input
+    duration instead (usage.type == "duration", usage.seconds). A
+    response_format other than json/verbose_json (text/srt/vtt/diarized_json)
+    reports no usage at all — that's honestly empty, not a guess, and not an
+    error (transcription still succeeded)."""
+    if "json" not in (content_type or ""):
+        return UsageInfo(prompt_tokens=0, completion_tokens=0)
+    try:
+        response = json.loads(content)
+    except json.JSONDecodeError:
+        return UsageInfo(prompt_tokens=0, completion_tokens=0)
+    usage = response.get("usage")
+    if not usage:
+        return UsageInfo(prompt_tokens=0, completion_tokens=0)
+    if usage.get("type") == "duration":
+        return UsageInfo(
+            prompt_tokens=0, completion_tokens=0, duration_seconds=float(usage.get("seconds", 0))
+        )
+    if usage.get("type") == "tokens":
+        raw = {k: usage[k] for k in ("input_token_details",) if k in usage}
+        return UsageInfo(
+            prompt_tokens=int(usage.get("input_tokens", 0)),
+            completion_tokens=int(usage.get("output_tokens", 0)),
+            raw=raw,
+        )
+    return UsageInfo(prompt_tokens=0, completion_tokens=0)
+
+
+def transcription_preview(content: bytes, content_type: str) -> str:
+    if "json" in (content_type or ""):
+        try:
+            text = json.loads(content).get("text")
+            if isinstance(text, str):
+                return text
+        except json.JSONDecodeError:
+            pass
+        return ""
+    try:
+        return content.decode("utf-8", errors="replace")
+    except Exception:
+        return ""
+
+
+def transcription_request_preview(form_fields: dict, filename: str) -> str:
+    """Human-readable stand-in for usage_logs.prompt_preview — there's no
+    request body to read a prompt from (multipart), so describe the upload."""
+    model = form_fields.get("model", "?")
+    return f"[audio file: {filename}, model={model}]"
+
+
+def call_speech(body: dict, api_key: str) -> tuple[bytes, str]:
+    return providers.send_request_binary(_SPEECH_URL, _bearer_headers(api_key), body, timeout=90.0)
+
+
+def extract_speech_usage(body: dict) -> UsageInfo:
+    """TTS's response is raw audio with no usage object anywhere (verified:
+    the endpoint's entire response body IS the audio, nothing else) — the
+    billing dimension is input character count, which only exists in the
+    REQUEST, so it's counted from `body` rather than the (binary) response."""
+    text = body.get("input")
+    characters = len(text) if isinstance(text, str) else None
+    return UsageInfo(prompt_tokens=0, completion_tokens=0, characters=characters)
+
+
 # ---- shared ----
 def prompt_preview(body: dict) -> str:
     """Human-readable stand-in for usage_logs.prompt_preview (only stored when

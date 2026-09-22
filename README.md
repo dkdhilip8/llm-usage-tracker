@@ -29,10 +29,13 @@ usage and cost on a dashboard. OpenAI · Anthropic · OpenRouter · Google Gemin
 > `:streamGenerateContent` (Gemini: `contents`/`parts`, `systemInstruction`, function calling,
 > built-in tools, multimodal `inline_data`/`file_data`), `/v1/embeddings` /
 > `:embedContent` / `:batchEmbedContents` (OpenAI and Gemini embeddings — Anthropic has none of
-> its own), and `/v1/images/generations` (OpenAI image generation — Gemini's image generation
-> needs no endpoint of its own, since it's just an image-capable model on the same
-> `generateContent`). Point the real `openai`/`anthropic`/`google-genai` SDK's `base_url` at the
-> gateway and it works unmodified: multi-turn history,
+> its own), `/v1/images/generations` (OpenAI image generation — Gemini's image generation needs
+> no endpoint of its own, since it's just an image-capable model on the same `generateContent`),
+> and `/v1/audio/transcriptions` / `/v1/audio/speech` (OpenAI transcription and TTS — Gemini's
+> native audio output is, again, just an audio-capable model on `generateContent`, and it has no
+> dedicated transcription endpoint at all: audio understanding is multimodal input to that same
+> endpoint). Point the real `openai`/`anthropic`/`google-genai` SDK's `base_url` at the gateway
+> and it works unmodified: multi-turn history,
 > tools/function-calling, structured outputs, and multimodal content parts all ride through
 > untouched — the gateway validates only `model` and never reconstructs the request field-by-field.
 > Each SDK's own default auth header is honored (`Authorization: Bearer`, `x-api-key`, or
@@ -317,16 +320,20 @@ membership (`403` if signed in but not in one).
 | **POST** | **`/v1beta/models/{model}:embedContent`** | `x-goog-api-key: vk_…` | **Gemini Embeddings passthrough** (`gemini` only). `{content, taskType?, outputDimensionality?, ...}` forwarded almost verbatim. |
 | **POST** | **`/v1beta/models/{model}:batchEmbedContents`** | `x-goog-api-key: vk_…` | Same, batched: `{requests: [{content, ...}, ...]}` → embeds every entry in one call. |
 | **POST** | **`/v1/images/generations`** | Bearer `vk_…` | **OpenAI Images passthrough** (`openai` only). `{model, prompt, size?, quality?, n?, ...}` forwarded almost verbatim → the real OpenAI response. Generation only — edits/variations (multipart file upload) aren't proxied, see "What's not proxied". No streaming. |
+| **POST** | **`/v1/audio/transcriptions`** | Bearer `vk_…` | **OpenAI transcription passthrough** (`openai` only). `multipart/form-data`: `file` + `model` (required), `language?`/`prompt?`/`response_format?`/`temperature?` forwarded almost verbatim → the real OpenAI response (JSON, or plain text/srt/vtt if requested). A handful of rarer fields aren't forwarded this pass — see "What's not proxied". |
+| **POST** | **`/v1/audio/speech`** | Bearer `vk_…` | **OpenAI TTS passthrough** (`openai` only). `{model, input, voice, response_format?, speed?, ...}` forwarded almost verbatim → the real OpenAI response, which is raw audio bytes, not JSON. |
 | GET | `/v1/proxy/inspect` | Bearer `vk_…` | this key's allowed providers + `{provider, ready}` (ready = a workspace key exists) |
 | POST | `/v1/proxy/chat` | Bearer `vk_…` | friendly shape used by the Playground: `{provider, model, prompt}` → completion + usage |
 
 The proxy (`/v1/*`, `/v1beta/*`) requires a `vk_…` key and is workspace-agnostic — the key itself
 is the credential, accepted in whichever header a provider's own SDK sends it in by default
 (`Authorization: Bearer`, `x-api-key`, or `x-goog-api-key` — all three resolve the same key).
-`/v1/messages`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`, and the Gemini native
-endpoints validate only `model` server-side; everything else in the request body is the client's
-own JSON, sent upstream unmodified — the real `anthropic` / `openai` / `google-genai` SDKs work by
-pointing `base_url` at the gateway with no other code change (see "Example integrations" below).
+`/v1/messages`, `/v1/responses`, `/v1/embeddings`, `/v1/images/generations`,
+`/v1/audio/transcriptions`, `/v1/audio/speech`, and the Gemini native endpoints validate only
+`model` server-side; everything else in the request body is the client's own JSON (or multipart
+form, for transcription), sent upstream unmodified — the real `anthropic` / `openai` /
+`google-genai` SDKs work by pointing `base_url` at the gateway with no other code change (see
+"Example integrations" below).
 Anthropic has no embeddings or image-generation API of its own (their docs point integrators at a
 third party) — there's nothing to proxy there. Gemini's image generation needs no endpoint of its
 own — point it at `/v1beta/models/{image-capable-model}:generateContent` with
@@ -344,6 +351,8 @@ client.chat.completions.create(model="openai/gpt-4o-mini", messages=[...], tools
 client.responses.create(model="gpt-4o-mini", input="...", tools=[...])
 client.embeddings.create(model="text-embedding-3-small", input="hello")
 client.images.generate(model="gpt-image-1", prompt="a red bicycle", size="1024x1024")
+client.audio.speech.create(model="tts-1", voice="alloy", input="hello")
+client.audio.transcriptions.create(model="whisper-1", file=open("clip.mp3", "rb"))
 
 # Anthropic SDK — native Messages API
 from anthropic import Anthropic
@@ -357,6 +366,10 @@ client.models.generate_content(model="gemini-2.5-flash", contents="hi")
 client.models.generate_content(  # image generation — same method, an image-capable model
     model="gemini-2.5-flash-image", contents="a red bicycle",
     config={"response_modalities": ["IMAGE"]},
+)
+client.models.generate_content(  # native audio output — same again, an audio-capable model
+    model="gemini-2.5-flash-preview-tts", contents="say hello",
+    config={"response_modalities": ["AUDIO"]},
 )
 client.models.embed_content(model="gemini-embedding-001", contents="hi")
 
@@ -400,9 +413,14 @@ as the next request; the gateway just re-authorizes, re-budgets, and forwards ea
   existed); any row present flips that provider to an explicit allow-list, enforced by
   `gateway.authorize_model` (`403 model_not_allowed` on a miss).
 - **usage_logs** — `id, key_id, request_id, provider, model, prompt_tokens, completion_tokens,
-  total_tokens, cost (nullable), cost_source, latency_ms, status, prompt_preview,
-  response_preview, usage_raw (jsonb, nullable), ts` (`mode` / `simulated` are legacy columns
-  from the retired simulator — always `live` / `false`). Workspace ownership flows through
+  total_tokens, duration_seconds (nullable), characters (nullable), cost (nullable), cost_source,
+  latency_ms, status, prompt_preview, response_preview, usage_raw (jsonb, nullable), ts` (`mode` /
+  `simulated` are legacy columns from the retired simulator — always `live` / `false`).
+  `duration_seconds`/`characters` (migration v9) are the non-token billing dimensions — audio
+  transcription's real unit for duration-billed models, TTS's input character count; see "Billing
+  units aren't always tokens" above. At most one of the three (`prompt_tokens`+`completion_tokens`
+  as a pair, `duration_seconds`, `characters`) is ever meaningfully non-zero/non-null for a given
+  row. Workspace ownership flows through
   `key_id → virtual_keys.workspace_id`. `cost_source` = `provider` (real charge) | `workspace`
   (this workspace's own `model_pricing` override) | `configured` (built-in/JSON price table) |
   `unknown` (none available — `cost` is `NULL`, never a fabricated number; every `SUM(cost)` in
@@ -448,8 +466,9 @@ There is no Alembic. `app/bootstrap.py::_migrate` runs guarded `information_sche
 `ALTER TABLE`s on boot. The v6 migration adds the workspace tables/columns, moves each existing
 account into a personal workspace as its admin (keys carried over), drops the old global-admin
 account and `virtual_keys.user_id`. v7 adds `virtual_keys.expires_at`, the `allowed_models`
-table, and `usage_logs.usage_raw`/nullable `cost`. v8 adds the `model_pricing` table. All
-additive and backward compatible with every key/row created before them.
+table, and `usage_logs.usage_raw`/nullable `cost`. v8 adds the `model_pricing` table. v9 adds
+`usage_logs.duration_seconds`/`.characters`. All additive and backward compatible with every
+key/row created before them.
 
 ### Adapter architecture
 
@@ -475,6 +494,44 @@ can't represent that honestly, so it's deliberately left unregistered (`cost_sou
 never a guessed blended number) while the real text/image token split still lands in `usage_raw`
 for a workspace's own pricing (see "Model pricing registry").
 
+### Billing units aren't always tokens
+
+Audio is where "everything is `prompt_tokens`/`completion_tokens`" stops being true, and the
+schema says so explicitly rather than forcing a fit:
+
+| Operation | Real billing unit | Where it lands |
+|---|---|---|
+| Chat, Responses, embeddings, most image gen | tokens | `usage_logs.prompt_tokens` / `.completion_tokens` |
+| Transcription — `whisper-1` | **audio duration** (seconds) | `usage_logs.duration_seconds` |
+| Transcription — `gpt-4o(-mini)-transcribe` | tokens (OpenAI's own choice, verified per-model, not assumed) | `usage_logs.prompt_tokens` / `.completion_tokens` |
+| TTS — any model | **input character count** | `usage_logs.characters` |
+
+`duration_seconds` and `characters` (migration v9) are dedicated nullable columns, not a token
+count standing in for something else — a duration- or character-billed row always has
+`prompt_tokens = completion_tokens = 0`, never an approximation. `app/adapters/base.py::UsageInfo`
+carries the same two optional fields from the adapter, and
+`gateway.completion_result_from_usage`/`_cost_and_source_for_usage` picks whichever one a given
+response actually set before ever falling back to the token path — see there for the exact
+precedence (a real provider-reported charge still wins over everything, same as elsewhere).
+
+Cost follows the same real-unit logic, in `pricing.py`'s `CONFIGURED_DURATION_PRICING` /
+`CONFIGURED_CHARACTER_PRICING` tables (parallel to the token table, same "never fabricate" rule):
+`whisper-1` ($0.006/minute) and `tts-1` ($15/1M characters) are registered — both stable,
+long-standing, verified rates — so those get a real `cost_source: "configured"` value. Anything
+unregistered (`gpt-4o-transcribe`'s token rate, `tts-1-hd`, `gpt-4o-mini-tts`, ...) honestly reports
+`"unknown"` rather than a guess, exactly like the token table already does. TTS's response carries
+no usage information at all (it's pure audio bytes, nothing else) — its character count comes from
+counting the request's own `input` field, not from anything the provider sent back; that's
+recording a real, exact quantity, not fabricating one.
+
+One more consistency guard worth naming: the model pricing registry (a workspace's own price
+overrides) is token-rate only — `input_per_1m`/`output_per_1m`, no duration/character equivalent
+yet. `gateway.record_usage` explicitly skips applying a workspace override to any row that set
+`duration_seconds` or `characters`, specifically because a token-rate override applied to a row
+whose token counts are always 0 would silently compute a wrong near-zero cost — worse than the
+honest built-in duration/character rate that row should keep using instead. Extending the registry
+itself to cover non-token billing is real future work, not something this phase forces in.
+
 ### What's not proxied (and why)
 
 - **OpenAI Realtime / a future Gemini Live API** — WebSocket, not request/response. The whole
@@ -488,9 +545,16 @@ for a workspace's own pricing (see "Model pricing registry").
   (`multipart/form-data`), a genuinely different request shape than every other endpoint here (all
   JSON bodies) — deliberately out of scope for now; generation (`/v1/images/generations`, text ->
   image) is proxied.
-- **Audio (transcription/speech) APIs** — a different billable unit (per-second/per-character)
-  than the token-based `prompt_tokens`/`completion_tokens`/`cost` shape every other endpoint here
-  shares, and transcription also takes a file upload like image edits do.
+- **Audio translations** (`/v1/audio/translations`) — same request/response shape as
+  transcription, always outputs English; not added this pass (transcription and TTS cover the
+  named scope; translations are a cheap, natural follow-up).
+- **A handful of transcription's rarer fields** (`timestamp_granularities`,
+  `chunking_strategy`, `keywords`, speaker diarization) — the transcription route is deliberately
+  a sync route with named `Form(...)` fields (`model`, `language`, `prompt`, `response_format`,
+  `temperature`), not a fully generic multipart pass-through, because reading a form generically
+  needs `async def` + `await request.form()`, and this codebase has no async routes anywhere else
+  — introducing one here would mean the route's own blocking DB/HTTP calls could stall the event
+  loop. Documented, not silently dropped.
 - **Anthropic embeddings** — Anthropic has no embeddings API of its own; their docs point
   integrators at a third party (Voyage AI). Nothing to proxy.
 - **Gemini's Interactions API, and its stateful/background modes in particular** (`store:true`
@@ -504,9 +568,9 @@ for a workspace's own pricing (see "Model pricing registry").
 
 ## Future improvements
 
-Audio (transcription/speech) APIs, OpenAI image edits/variations (Phase 3 continued) ·
-production-hardening pass — reliability, rate limiting, observability, security, cost accuracy,
-scalability, database hardening, CI/CD, production-readiness review · Gemini built-in tools (code
-execution, Search grounding) test coverage · per-model budgets · webhook/Slack alerts ·
-usage-anomaly detection · exact-match response cache · Redis for shared rate-limit / budget
-counters · SSO / org hierarchy.
+OpenAI image edits/variations, audio translations, duration/character rates in the model pricing
+registry (Phase 3 continued, all documented limitations above) · production-hardening pass —
+reliability, rate limiting, observability, security, cost accuracy, scalability, database
+hardening, CI/CD, production-readiness review · Gemini built-in tools (code execution, Search
+grounding) test coverage · per-model budgets · webhook/Slack alerts · usage-anomaly detection ·
+exact-match response cache · Redis for shared rate-limit / budget counters · SSO / org hierarchy.

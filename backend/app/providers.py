@@ -79,6 +79,36 @@ def stream_request(
             yield from r.iter_lines()
 
 
+def send_request_binary(
+    url: str, headers: dict, json_body: dict, *, timeout: float = 60.0
+) -> tuple[bytes, str]:
+    """Like send_request, but for an endpoint whose response is never JSON
+    (OpenAI's TTS returns raw audio bytes) — returns (content, content_type)
+    untouched rather than trying to .json() it. Raises httpx.HTTPStatusError
+    on a real error status (same as send_request; the response is already
+    fully buffered by a non-streaming httpx.post, so exc.response.content is
+    available to the caller without any extra read)."""
+    r = httpx.post(url, headers=headers, json=json_body, timeout=timeout)
+    r.raise_for_status()
+    return r.content, r.headers.get("content-type", "application/octet-stream")
+
+
+def send_multipart(
+    url: str, headers: dict, data: dict, files: dict, *, timeout: float = 60.0
+) -> tuple[bytes, str]:
+    """Like send_request_binary, but for a multipart/form-data upload (audio
+    transcription takes a file). `data` is the plain form fields, `files` is
+    httpx's files= mapping (field name -> (filename, bytes, content_type)).
+    `headers` must NOT include Content-Type — httpx sets the multipart
+    boundary itself from `files`. Returns (content, content_type) rather than
+    parsed JSON: a transcription's response_format can be plain text/srt/vtt,
+    not just JSON, so parsing here would be wrong as often as it's right —
+    the caller decides how to interpret the bytes."""
+    r = httpx.post(url, headers=headers, data=data, files=files, timeout=timeout)
+    r.raise_for_status()
+    return r.content, r.headers.get("content-type", "application/octet-stream")
+
+
 def resolved_key(provider: str) -> str:
     """The instance-wide server env var for this provider, if any."""
     return settings.provider_api_key(provider)

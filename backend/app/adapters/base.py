@@ -15,6 +15,10 @@ from typing import Any
 
 @dataclass
 class UsageInfo:
+    # Token-billed operations (chat, embeddings, most image gen) set these;
+    # a non-token-billed operation (audio) leaves both 0 and sets
+    # duration_seconds or characters below instead — never approximated as
+    # tokens just to fit this shape.
     prompt_tokens: int
     completion_tokens: int
     # Non-None only when the provider itself reports a real per-request charge
@@ -28,3 +32,10 @@ class UsageInfo:
     # than forced into new typed columns every time a provider's usage object
     # grows a field.
     raw: dict[str, Any] = field(default_factory=dict)
+    # Non-token billing dimensions — set at most one, only by an adapter whose
+    # provider actually bills this way (audio transcription: input duration;
+    # TTS: input character count). See gateway.completion_result_from_usage
+    # for how these map to cost, and pricing.py for the duration/character
+    # price tables.
+    duration_seconds: float | None = None
+    characters: int | None = None

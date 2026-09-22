@@ -250,3 +250,67 @@ def test_image_generation_needs_no_new_endpoint_just_an_image_capable_model(clie
     assert items[0]["prompt_tokens"] == 8 and items[0]["completion_tokens"] == 1290
     # no text part anywhere in the response -> text preview is empty, not a crash
     assert items[0]["response_preview"] in (None, "")
+
+
+def test_audio_output_needs_no_new_endpoint_just_responsemodalities_audio(client, admin_client, make_live_key, monkeypatch):
+    """Gemini's native audio output (TTS-equivalent) is reached through this
+    SAME generateContent endpoint too — responseModalities: ["AUDIO"] on an
+    audio-capable model, exactly like image generation. No new endpoint, no
+    new adapter code; billed the same way as everything else through this
+    endpoint (token-based usageMetadata — Gemini's own real billing unit for
+    this, unlike OpenAI's separate per-character TTS API)."""
+
+    def fake_send(url, headers, json_body, *, timeout=60.0):
+        return {
+            "candidates": [
+                {
+                    "content": {
+                        "role": "model",
+                        "parts": [{"inlineData": {"mimeType": "audio/L16;rate=24000", "data": "ZmFrZQ=="}}],
+                    },
+                    "finishReason": "STOP",
+                }
+            ],
+            "usageMetadata": {"promptTokenCount": 6, "candidatesTokenCount": 240, "totalTokenCount": 246},
+        }
+
+    monkeypatch.setattr("app.providers.send_request", fake_send)
+    k = make_live_key(allowed_providers=["gemini"])
+    body = {
+        "contents": [{"role": "user", "parts": [{"text": "say hello"}]}],
+        "generationConfig": {"responseModalities": ["AUDIO"]},
+    }
+    r = client.post(_gen_url("gemini-2.5-flash-preview-tts"), json=body, headers=_goog(k["key"]))
+    assert r.status_code == 200
+    assert r.json()["candidates"][0]["content"]["parts"][0]["inlineData"]["mimeType"].startswith("audio/")
+
+    items = admin_client.get("/api/requests").json()["items"]
+    assert items[0]["prompt_tokens"] == 6 and items[0]["completion_tokens"] == 240
+    assert items[0]["duration_seconds"] is None and items[0]["characters"] is None  # still token-billed, not audio-dimension
+
+
+def test_audio_input_needs_no_new_endpoint_just_inline_data(client, admin_client, make_live_key, mock_provider):
+    """Gemini has no dedicated transcription/STT endpoint — audio
+    understanding is multimodal INPUT to this same endpoint (an inline_data
+    part), the same way image/PDF/video input already worked since Phase 1.
+    Not a duration-billed operation on Gemini's side — it's just more input
+    tokens, reported the same as any other generateContent call."""
+    k = make_live_key(allowed_providers=["gemini"])
+    body = {
+        "contents": [
+            {
+                "role": "user",
+                "parts": [
+                    {"text": "transcribe this"},
+                    {"inline_data": {"mime_type": "audio/mp3", "data": "ZmFrZQ=="}},
+                ],
+            }
+        ],
+    }
+    r = client.post(_gen_url("gemini-2.5-flash"), json=body, headers=_goog(k["key"]))
+    assert r.status_code == 200
+    sent = mock_provider[0][2]
+    assert sent["contents"][0]["parts"][1]["inline_data"]["mime_type"] == "audio/mp3"
+
+    items = admin_client.get("/api/requests").json()["items"]
+    assert items[0]["provider"] == "gemini" and items[0]["status"] == "success"

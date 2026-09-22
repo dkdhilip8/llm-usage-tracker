@@ -13,6 +13,7 @@ from app.db import Base, SessionLocal, engine
 from app.gateway import UpstreamHTTPError
 from app.routers import (
     account,
+    audio,
     auth,
     embeddings,
     gemini,
@@ -100,6 +101,7 @@ app.include_router(messages.router)
 app.include_router(responses.router)
 app.include_router(embeddings.router)
 app.include_router(images.router)
+app.include_router(audio.router)
 app.include_router(gemini.router)
 app.include_router(providers_router.router)
 app.include_router(requests_router.router)

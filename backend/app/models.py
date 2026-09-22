@@ -267,6 +267,12 @@ class UsageLog(Base):
     # tokens, reasoning tokens, cache-write tokens, per-modality breakdown,
     # ...), verbatim and provider-shaped — see adapters/base.py::UsageInfo.raw.
     usage_raw: Mapped[dict | None] = mapped_column(JSONB)
+    # Non-token billing dimensions — audio transcription bills by input
+    # duration, TTS by input character count. Never forced into
+    # prompt_tokens/completion_tokens (which stay 0 for these rows); see
+    # adapters/base.py::UsageInfo and gateway.completion_result_from_usage.
+    duration_seconds: Mapped[float | None] = mapped_column(Numeric(12, 3))
+    characters: Mapped[int | None] = mapped_column(Integer)
     # spec's "timestamp"; named `ts` to dodge the SQL type-name clash.
     ts: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False, index=True

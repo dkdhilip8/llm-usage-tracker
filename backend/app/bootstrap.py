@@ -106,6 +106,14 @@ def _migrate(db: Session) -> None:
         ModelPricing.__table__.create(bind=db.get_bind(), checkfirst=True)
         db.commit()
 
+    # v9: non-token billing dimensions (audio duration / TTS character count).
+    if not _has_col(db, "usage_logs", "duration_seconds"):
+        db.execute(text("ALTER TABLE usage_logs ADD COLUMN duration_seconds NUMERIC(12, 3)"))
+        db.commit()
+    if not _has_col(db, "usage_logs", "characters"):
+        db.execute(text("ALTER TABLE usage_logs ADD COLUMN characters INTEGER"))
+        db.commit()
+
 
 def _migrate_v6_workspaces(db: Session) -> None:
     """Runs once, guarded by the presence of the old `users.is_admin` column.

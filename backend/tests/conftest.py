@@ -118,12 +118,14 @@ def mock_provider(monkeypatch):
     """Stub every outbound provider call — both the legacy call_provider /
     stream_openai_compatible functions (used by /v1/proxy/chat and the
     anthropic/gemini legacy path of /v1/chat/completions) AND the lower-level
-    app.providers.send_request / stream_request seam (used by the new
-    adapters: /v1/messages, /v1/responses, and the openai/openrouter
-    full-fidelity path of /v1/chat/completions). Returns the list of recorded
-    calls — legacy calls append (provider, model, prompt, api_key) tuples,
-    adapter calls append (url, headers, json_body) tuples; no single test
-    exercises both shapes, so calls[0] is unambiguous per test.
+    app.providers.send_request / stream_request / send_multipart /
+    send_request_binary seam (used by the new adapters: /v1/messages,
+    /v1/responses, the openai/openrouter full-fidelity path of
+    /v1/chat/completions, and the multipart/binary audio endpoints). Returns
+    the list of recorded calls — legacy calls append (provider, model,
+    prompt, api_key) tuples, JSON adapter calls append (url, headers,
+    json_body), multipart calls append (url, headers, data, files); no single
+    test exercises more than one shape, so calls[0] is unambiguous per test.
 
     By default cost is unreported (=> cost_source 'configured'/'unknown');
     monkeypatch app.providers.send_request/stream_request directly for a
@@ -314,10 +316,26 @@ def mock_provider(monkeypatch):
             yield ""
             yield "data: [DONE]"
 
+    def fake_send_multipart(url, headers, data, files, *, timeout=60.0):
+        calls.append((url, headers, data, files))
+        model = data.get("model")
+        if model == "whisper-1":
+            usage = {"type": "duration", "seconds": 12.5}
+        else:  # gpt-4o-transcribe / gpt-4o-mini-transcribe
+            usage = {"type": "tokens", "input_tokens": 20, "output_tokens": 8, "total_tokens": 28}
+        body = json.dumps({"text": "reply to: mock transcription", "usage": usage}).encode()
+        return body, "application/json"
+
+    def fake_send_binary(url, headers, json_body, *, timeout=60.0):
+        calls.append((url, headers, json_body))
+        return b"FAKE_AUDIO_BYTES", "audio/mpeg"
+
     monkeypatch.setattr("app.providers.call_provider", fake_call)
     monkeypatch.setattr("app.providers.stream_openai_compatible", fake_stream)
     monkeypatch.setattr("app.providers.send_request", fake_send)
     monkeypatch.setattr("app.providers.stream_request", fake_stream_request)
+    monkeypatch.setattr("app.providers.send_multipart", fake_send_multipart)
+    monkeypatch.setattr("app.providers.send_request_binary", fake_send_binary)
     return calls
 
 
