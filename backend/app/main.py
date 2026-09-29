@@ -83,6 +83,23 @@ def healthz() -> dict:
     return {"status": "ok", "version": settings.VERSION}
 
 
+@app.get("/version")
+def version() -> dict:
+    """Deployment identity, for drift detection (see scripts/check_drift.py).
+
+    `version` is the hand-maintained app release string (unchanged). `commit`
+    and `branch` are the exact deployed Git identity, read from Render's runtime
+    env (RENDER_GIT_COMMIT / RENDER_GIT_BRANCH); both are null off-Render
+    (local / docker-compose) — a local SHA is never fabricated. The commit SHA
+    is public (it's in the public repo), so this endpoint stays unauthenticated
+    like /healthz and never exposes any secret."""
+    return {
+        "version": settings.VERSION,
+        "commit": settings.RENDER_GIT_COMMIT or None,
+        "branch": settings.RENDER_GIT_BRANCH or None,
+    }
+
+
 @app.exception_handler(UpstreamHTTPError)
 async def upstream_http_error_handler(_: Request, exc: UpstreamHTTPError) -> Response:
     """A native passthrough endpoint's real provider error — relayed with the

@@ -248,6 +248,46 @@ curl -s -o /dev/null -w "%{http_code} %{time_total}s\n" https://<service>.onrend
 
 Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 
+### Deployment drift monitoring
+
+Pushing `main` does **not** reliably auto-deploy this Render service, so "the code on `main`" and
+"the code actually running" can silently diverge. Two pieces detect that:
+
+**`GET /version`** (unauthenticated, like `/healthz`) reports the running deployment's identity:
+
+```json
+{ "version": "0.19.0", "commit": "732c12f…", "branch": "main" }
+```
+
+`version` is the hand-maintained release string. `commit`/`branch` are the exact deployed Git
+identity, read from Render's runtime env (`RENDER_GIT_COMMIT` / `RENDER_GIT_BRANCH`, which Render
+injects for Docker services too — no Dockerfile or `render.yaml` change needed). Off-Render (local,
+docker-compose) both are `null` — a local SHA is never fabricated. The commit SHA is public (it's in
+the repo), so nothing sensitive is exposed.
+
+**`scripts/check_drift.py`** does a three-way comparison and exits non-zero on any mismatch:
+
+```
+expected  = origin/main HEAD            (git ls-remote)
+deployed  = Render's live deploy commit (Render API)
+running   = GET /version commit         (the live app)
+```
+
+```bash
+# full check — needs a Render API key for the "deployed" layer
+RENDER_API_KEY=rnd_… python scripts/check_drift.py
+
+# subset checks (no API key): compare only what you can reach
+python scripts/check_drift.py --skip-deployed          # expected vs running
+python scripts/check_drift.py --skip-deployed --skip-running   # just resolve origin/main
+python scripts/check_drift.py --self-test              # offline logic check
+```
+
+Stdlib only, no monitoring infrastructure. `RENDER_SERVICE_ID` / `APP_URL` / `GIT_REMOTE` /
+`GIT_BRANCH` default to this project's values and can be overridden by env var or flag; the API key
+is read from `RENDER_API_KEY` and never printed. (Scheduling this check and config-drift detection
+are deliberately out of scope for now.)
+
 ---
 
 ## Environment variables
@@ -277,6 +317,8 @@ Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 | `CORS_ORIGINS` | `""` | Comma-separated origins; local dev only. |
 | `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `OPENROUTER_API_KEY` / `GEMINI_API_KEY` | `""` | Instance-wide provider creds — configure a provider for every workspace. Always win over a workspace's attached key. Never shown in the UI. With none set, a request `402`s until its workspace attaches a key. Gemini uses Google's OpenAI-compatible endpoint. |
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
+| `RENDER_GIT_COMMIT` | `""` | Deployed commit SHA, **set automatically by Render** at runtime (Docker included). Surfaced at `GET /version` for drift detection; leave unset locally ⇒ `commit: null`. Never set this by hand. |
+| `RENDER_GIT_BRANCH` | `""` | Deployed branch, set automatically by Render. Surfaced at `GET /version`; unset locally ⇒ `branch: null`. |
 | `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the Requests tab. Off by default — bodies can be sensitive. |
 | `MODEL_PRICING_OVERRIDES_PATH` | `""` | Optional path to a JSON file of extra `{provider, model, input, output}` price entries, merged over the built-in table at startup — price a newly released model without a code deploy. A missing/malformed file is silently ignored. |
 | `IDEMPOTENCY_TTL_HOURS` | `24` | How long a stored `Idempotency-Key` result is replayable before it expires and an identical request is treated as fresh (`app/idempotency.py`). |

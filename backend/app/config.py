@@ -92,6 +92,15 @@ class Settings(BaseSettings):
 
     VERSION: str = "0.19.0"
 
+    # ---- deployment identity (drift monitoring) ----
+    # Set automatically by Render at runtime, for every runtime including Docker
+    # (RENDER_GIT_COMMIT / RENDER_GIT_BRANCH — see GET /version). Empty off-Render
+    # (local, docker-compose): /version then reports commit/branch as null rather
+    # than fabricating a local SHA. Distinct from VERSION — VERSION is the
+    # hand-maintained release string; this is the exact deployed commit identity.
+    RENDER_GIT_COMMIT: str = ""
+    RENDER_GIT_BRANCH: str = ""
+
     @model_validator(mode="after")
     def _validate_deployment(self) -> "Settings":
         """Fail closed on unsafe config in a deployed ENVIRONMENT."""
