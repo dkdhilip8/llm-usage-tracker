@@ -33,6 +33,7 @@ Examples:
 from __future__ import annotations
 
 import argparse
+import itertools
 import json
 import os
 import subprocess
@@ -113,34 +114,39 @@ def _sha_eq(a: str | None, b: str | None) -> bool:
 
 
 def compare(expected, deployed, running, *, skip_deployed=False, skip_running=False):
-    """Pure: returns (in_sync, report_lines). in_sync is True only when every
-    comparison that can be made agrees. A value that is None but not skipped is a
-    failure (can't confirm sync). If no comparison can be made at all, that's
-    reported but treated as in_sync (nothing to contradict)."""
-    lines: list[str] = []
-    ok = True
-    comparisons = 0
+    """Pure: returns (in_sync, report_lines). Compares EVERY pair among the layers
+    that are present (not skipped) — expected is always present, deployed unless
+    skip_deployed, running unless skip_running. in_sync is True only when every
+    such pair agrees. A present layer whose value is None (couldn't be resolved)
+    fails its comparisons. Fewer than two present layers is insufficient
+    information for a meaningful drift check and is NOT in sync."""
+    layers = [
+        ("expected", expected, False),
+        ("deployed", deployed, skip_deployed),
+        ("running", running, skip_running),
+    ]
+    present = [(name, val) for name, val, skipped in layers if not skipped]
 
-    def pair(label: str, left, right, left_skipped, right_skipped):
-        nonlocal ok, comparisons
-        if left_skipped or right_skipped:
-            lines.append(f"  {label:<22} SKIPPED")
-            return
-        comparisons += 1
-        if left is None or right is None:
+    lines: list[str] = []
+    if len(present) < 2:
+        have = ", ".join(name for name, _ in present) or "none"
+        lines.append(
+            f"  insufficient information: only {len(present)} layer present ({have}); "
+            "need at least 2 to compare"
+        )
+        return False, lines
+
+    ok = True
+    for (an, av), (bn, bv) in itertools.combinations(present, 2):
+        label = f"{an} vs {bn}:"
+        if av is None or bv is None:
             ok = False
-            lines.append(f"  {label:<22} UNKNOWN (a value could not be resolved)")
-        elif _sha_eq(left, right):
-            lines.append(f"  {label:<22} MATCH")
+            lines.append(f"  {label:<24} UNKNOWN (a value could not be resolved)")
+        elif _sha_eq(av, bv):
+            lines.append(f"  {label:<24} MATCH")
         else:
             ok = False
-            lines.append(f"  {label:<22} DRIFT")
-
-    pair("expected vs deployed:", expected, deployed, False, skip_deployed)
-    pair("deployed vs running:", deployed, running, skip_deployed, skip_running)
-
-    if comparisons == 0:
-        lines.append("  (no comparisons could be made - nothing to contradict)")
+            lines.append(f"  {label:<24} DRIFT")
     return ok, lines
 
 
@@ -153,13 +159,18 @@ def _fmt(label: str, sha, skipped: bool) -> str:
 def _self_test() -> int:
     long = "a" * 40
     other = "b" * 40
+    # (expected, deployed, running, skip_deployed, skip_running) -> want_in_sync
     cases = [
-        ((long, long, long, False, False), True),          # all agree
-        ((long, other, long, False, False), False),        # pushed, not deployed
+        ((long, long, long, False, False), True),          # all three agree
+        ((long, other, other, False, False), False),       # pushed, not deployed
         ((long, long, other, False, False), False),        # stale running instance
-        ((long, None, long, False, False), False),         # deployed unresolved
-        ((long, None, None, True, True), True),            # both skipped -> nothing to contradict
+        ((long, None, long, False, False), False),         # a present layer unresolved
         ((long, long[:12], long, False, False), True),     # abbreviation matches
+        ((long, None, long, True, False), True),           # skip deployed: expected == running
+        ((long, None, other, True, False), False),         # skip deployed: expected != running
+        ((long, long, None, False, True), True),           # skip running: expected == deployed
+        ((long, other, None, False, True), False),         # skip running: expected != deployed
+        ((long, None, None, True, True), False),           # only one layer -> insufficient
     ]
     failures = 0
     for args, want in cases:
