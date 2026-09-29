@@ -283,3 +283,61 @@ class UsageLog(Base):
         Index("ix_usage_logs_provider", "provider"),
         Index("ix_usage_logs_model", "model"),
     )
+
+
+class IdempotencyRecord(Base):
+    """One client-supplied Idempotency-Key, scoped to the virtual key that sent
+    it. Lets the gateway replay a previously-completed response instead of
+    re-calling (and re-billing) the provider when a client retries the same
+    request — see app.idempotency.
+
+    Spend protection, so unlike the fail-OPEN rate limiter this is Postgres-only
+    and fails CLOSED: the claim is durable, transactional, and first-writer-wins
+    via UNIQUE(key_id, idempotency_key).
+
+    The response body is Fernet-encrypted at rest (never plaintext) and only
+    stored up to settings.IDEMPOTENCY_MAX_REPLAY_BYTES. A larger response is
+    recorded terminal-but-not-replayable (`replayable=False`, body NULL) so the
+    key still can't drive a second billable call, but a later retry gets an
+    honest 409 instead of a silently-wrong empty replay."""
+
+    __tablename__ = "idempotency_keys"
+    __table_args__ = (
+        UniqueConstraint("key_id", "idempotency_key", name="uq_idempotency_key_scope"),
+        Index("ix_idempotency_expires_at", "expires_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    # Tenant scope — every lookup filters on this, so a key from another virtual
+    # key/workspace can never retrieve this row.
+    key_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("virtual_keys.id", ondelete="CASCADE"), nullable=False
+    )
+    workspace_id: Mapped[int] = mapped_column(BigInteger, nullable=False, index=True)
+    idempotency_key: Mapped[str] = mapped_column(String(255), nullable=False)
+    # SHA-256 hex of the full semantic request — detects same-key/different-body.
+    request_fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)
+    endpoint: Mapped[str] = mapped_column(String, nullable=False)
+    provider: Mapped[str] = mapped_column(String, nullable=False)
+    model: Mapped[str] = mapped_column(String, nullable=False)
+    # in_progress | completed | failed
+    status: Mapped[str] = mapped_column(String, nullable=False, default="in_progress")
+    # False until a terminal response within the size cap is stored.
+    replayable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    response_status: Mapped[int | None] = mapped_column(Integer)
+    response_content_type: Mapped[str | None] = mapped_column(String)
+    # Fernet(base64(body)) — see app.idempotency; NULL when not replayable.
+    response_body_encrypted: Mapped[str | None] = mapped_column(Text)
+    usage_log_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("usage_logs.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

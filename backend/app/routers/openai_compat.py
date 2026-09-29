@@ -31,11 +31,11 @@ from collections.abc import Iterator
 from uuid import uuid4
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app import providers
+from app import idempotency, providers
 from app.adapters import openai_adapter
 from app.db import get_db
 from app.gateway import (
@@ -90,6 +90,7 @@ def _chunk(cid: str, created: int, model: str, delta: dict, finish: str | None =
 @router.post("/chat/completions")
 def chat_completions(
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
@@ -101,13 +102,17 @@ def chat_completions(
     stream = bool(body.get("stream"))
 
     if provider in _NATIVE_ADAPTER_PROVIDERS:
-        enforce_workspace_quota(db, vk)
-        enforce_budget(db, vk)
-        enforce_workspace_cap(db, vk, provider)
-        live_key = require_live_ready(db, vk, provider)  # 403 paused / 402 no key
-
         native_body = {**body, "model": model}  # strip the "<provider>/" prefix before forwarding
         if not stream:
+            idem = idempotency.begin(
+                db, vk, header=idempotency_key,
+                endpoint="/v1/chat/completions", provider=provider, model=model,
+                body_material=native_body,
+            )
+            enforce_workspace_quota(db, vk)
+            enforce_budget(db, vk)
+            enforce_workspace_cap(db, vk, provider)
+            live_key = require_live_ready(db, vk, provider)  # 403 paused / 402 no key
             response = run_native_completion(
                 db,
                 vk,
@@ -119,8 +124,19 @@ def chat_completions(
                 prompt_preview=openai_adapter.prompt_preview(native_body),
                 api_key=live_key,
                 body=native_body,
+                idem=idem,
             )
             return JSONResponse(response)
+
+        enforce_workspace_quota(db, vk)
+        enforce_budget(db, vk)
+        enforce_workspace_cap(db, vk, provider)
+        live_key = require_live_ready(db, vk, provider)  # 403 paused / 402 no key
+        idem = idempotency.claim_streaming(
+            db, vk, header=idempotency_key,
+            endpoint="/v1/chat/completions:stream", provider=provider, model=model,
+            body_material=native_body,
+        )
         return StreamingResponse(
             stream_native_passthrough(
                 vk.id,
@@ -131,6 +147,7 @@ def chat_completions(
                 accumulator_cls=openai_adapter.ChatStreamUsageAccumulator,
                 api_key=live_key,
                 body=native_body,
+                idem_record_id=idem.record_id,
             ),
             media_type="text/event-stream",
             headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
@@ -141,18 +158,27 @@ def chat_completions(
     prompt = _prompt_from_messages(messages)
     if not prompt:
         raise HTTPException(422, "messages must contain user text content")
-    enforce_workspace_quota(db, vk)
-    enforce_budget(db, vk)
-    enforce_workspace_cap(db, vk, provider)
-    live_key = require_live_ready(db, vk, provider)  # 403 paused / 402 no key
 
     cid = f"chatcmpl-{uuid4().hex}"
     created = int(time.time())
 
     if not stream:
-        result = run_completion(db, vk, provider, model, prompt)
-        record_usage(db, vk, provider, model, prompt, result, request_id=cid)
-        return {
+        idem = idempotency.begin(
+            db, vk, header=idempotency_key,
+            endpoint="/v1/chat/completions", provider=provider, model=model, body_material=body,
+        )
+        enforce_workspace_quota(db, vk)
+        enforce_budget(db, vk)
+        enforce_workspace_cap(db, vk, provider)
+        require_live_ready(db, vk, provider)  # 403 paused / 402 no key
+        idempotency.claim(idem)
+        try:
+            result = run_completion(db, vk, provider, model, prompt)
+        except HTTPException as exc:
+            idempotency.finalize_or_release_http_error(idem, exc)
+            raise
+        row = record_usage(db, vk, provider, model, prompt, result, request_id=cid)
+        resp = {
             "id": cid,
             "object": "chat.completion",
             "created": created,
@@ -175,7 +201,18 @@ def chat_completions(
                 "latency_ms": result.latency_ms,
             },
         }
+        idempotency.finalize_json(idem, resp, usage_log_id=row.id)
+        return resp
 
+    enforce_workspace_quota(db, vk)
+    enforce_budget(db, vk)
+    enforce_workspace_cap(db, vk, provider)
+    live_key = require_live_ready(db, vk, provider)  # 403 paused / 402 no key
+    stream_idem = idempotency.claim_streaming(
+        db, vk, header=idempotency_key,
+        endpoint="/v1/chat/completions:stream", provider=provider, model=model, body_material=body,
+    )
+    idem_record_id = stream_idem.record_id
     vk_id = vk.id
 
     def event_stream() -> Iterator[str]:
@@ -266,6 +303,7 @@ def chat_completions(
         record_usage_detached(
             vk_id, provider, model, prompt, result, request_id=cid, status=status
         )
+        idempotency.release_detached(idem_record_id)  # end of stream => drop the concurrency lock
 
     return StreamingResponse(
         event_stream(),

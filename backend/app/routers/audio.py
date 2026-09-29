@@ -31,10 +31,11 @@ prompt_tokens/completion_tokens; see `CompletionResult.duration_seconds` /
 `.characters` and the matching `usage_logs` columns (migration v9).
 """
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
+from app import idempotency
 from app.adapters import openai_adapter
 from app.db import get_db
 from app.gateway import (
@@ -54,9 +55,15 @@ router = APIRouter(prefix="/v1", tags=["openai-native"])
 _PROVIDER = "openai"
 
 
-def _authorize(db: Session, vk: VirtualKey, model: str) -> str:
+def _authorize_acl(vk: VirtualKey, model: str) -> None:
+    """Deterministic ACL half of the preamble — runs before the idempotency
+    lookup (it defines the request's provider/model identity)."""
     authorize_provider(vk, _PROVIDER)
     authorize_model(vk, _PROVIDER, model)
+
+
+def _govern_and_key(db: Session, vk: VirtualKey) -> str:
+    """Spend/quota gates + live-readiness — the "new work" gates a replay skips."""
     enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
     enforce_workspace_cap(db, vk, _PROVIDER)
@@ -71,12 +78,13 @@ def create_transcription(
     prompt: str | None = Form(None),
     response_format: str | None = Form(None),
     temperature: float | None = Form(None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
     if not model:
         raise HTTPException(422, "model is required")
-    api_key = _authorize(db, vk, model)
+    _authorize_acl(vk, model)
 
     file_bytes = file.file.read()  # sync read — this is a sync route
     filename = file.filename or "audio"
@@ -88,6 +96,16 @@ def create_transcription(
         "response_format": response_format,
         "temperature": temperature,
     }
+
+    # Multipart fingerprint = the form fields + the raw file bytes + the filename,
+    # so the same audio+options replays and different audio is a new request.
+    idem = idempotency.begin(
+        db, vk, header=idempotency_key,
+        endpoint="/v1/audio/transcriptions", provider=_PROVIDER, model=model,
+        body_material={**form_fields, "filename": filename},
+        extra=file_bytes,
+    )
+    api_key = _govern_and_key(db, vk)
 
     content, content_type = run_native_completion_raw(
         db,
@@ -101,6 +119,7 @@ def create_transcription(
         preview_fn=openai_adapter.transcription_preview,
         prompt_preview=openai_adapter.transcription_request_preview(form_fields, filename),
         api_key=api_key,
+        idem=idem,
     )
     return Response(content=content, media_type=content_type)
 
@@ -108,13 +127,19 @@ def create_transcription(
 @router.post("/audio/speech")
 def create_speech(
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
     model = body.get("model")
     if not isinstance(model, str) or not model:
         raise HTTPException(422, "model is required")
-    api_key = _authorize(db, vk, model)
+    _authorize_acl(vk, model)
+    idem = idempotency.begin(
+        db, vk, header=idempotency_key,
+        endpoint="/v1/audio/speech", provider=_PROVIDER, model=model, body_material=body,
+    )
+    api_key = _govern_and_key(db, vk)
 
     content, content_type = run_native_completion_raw(
         db,
@@ -125,5 +150,6 @@ def create_speech(
         extract_usage_fn=lambda _content, _content_type: openai_adapter.extract_speech_usage(body),
         prompt_preview=openai_adapter.prompt_preview(body),
         api_key=api_key,
+        idem=idem,
     )
     return Response(content=content, media_type=content_type)

@@ -77,7 +77,7 @@ def _clean_tables():
     with SessionLocal() as s:
         s.execute(
             text(
-                "TRUNCATE usage_logs, allowed_providers, virtual_keys, "
+                "TRUNCATE idempotency_keys, usage_logs, allowed_providers, virtual_keys, "
                 "provider_credentials, workspace_invites, users, workspaces "
                 "RESTART IDENTITY CASCADE"
             )

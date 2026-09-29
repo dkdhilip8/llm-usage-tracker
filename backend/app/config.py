@@ -77,6 +77,19 @@ class Settings(BaseSettings):
     # Off by default — request bodies can contain sensitive data.
     LOG_BODIES: bool = False
 
+    # ---- idempotency (app/idempotency.py) ----
+    # How long a stored Idempotency-Key result is honored before it expires and
+    # an identical request is treated as fresh (matches the common provider TTL).
+    IDEMPOTENCY_TTL_HOURS: int = 24
+    # Max stored (encrypted) replay body. A larger response (big base64 image,
+    # audio) is recorded terminal-but-not-replayable rather than bloating the DB.
+    IDEMPOTENCY_MAX_REPLAY_BYTES: int = 262_144  # 256 KiB
+    # A claim stuck in_progress longer than this (e.g. a crashed leader) may be
+    # reclaimed. Tied to the max provider call timeout (60s in app/providers.py)
+    # plus margin — deliberately NOT an arbitrarily short value, so a slow-but-
+    # live request is never stolen out from under itself.
+    IDEMPOTENCY_INFLIGHT_TIMEOUT_SECONDS: int = 120
+
     VERSION: str = "0.19.0"
 
     @model_validator(mode="after")

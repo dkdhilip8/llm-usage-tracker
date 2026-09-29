@@ -11,10 +11,11 @@ almost verbatim (only `model` is validated by the gateway). No streaming —
 the Embeddings API doesn't support it.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
+from app import idempotency
 from app.adapters import openai_adapter
 from app.db import get_db
 from app.gateway import (
@@ -37,6 +38,7 @@ _PROVIDER = "openai"
 @router.post("/embeddings")
 def create_embeddings(
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
@@ -45,6 +47,10 @@ def create_embeddings(
         raise HTTPException(422, "model is required")
     authorize_provider(vk, _PROVIDER)
     authorize_model(vk, _PROVIDER, model)
+    idem = idempotency.begin(
+        db, vk, header=idempotency_key,
+        endpoint="/v1/embeddings", provider=_PROVIDER, model=model, body_material=body,
+    )
     enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
     enforce_workspace_cap(db, vk, _PROVIDER)
@@ -61,5 +67,6 @@ def create_embeddings(
         prompt_preview=openai_adapter.prompt_preview(body),
         api_key=api_key,
         body=body,
+        idem=idem,
     )
     return JSONResponse(response)

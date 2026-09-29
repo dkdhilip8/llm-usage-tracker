@@ -10,10 +10,11 @@ forwarded almost verbatim (only `model` is validated by the gateway). Tools
 and multi-turn `input` items all ride through untouched.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+from app import idempotency
 from app.adapters import openai_adapter
 from app.db import get_db
 from app.gateway import (
@@ -37,6 +38,7 @@ _PROVIDER = "openai"
 @router.post("/responses")
 def responses(
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
@@ -45,12 +47,16 @@ def responses(
         raise HTTPException(422, "model is required")
     authorize_provider(vk, _PROVIDER)
     authorize_model(vk, _PROVIDER, model)
-    enforce_workspace_quota(db, vk)
-    enforce_budget(db, vk)
-    enforce_workspace_cap(db, vk, _PROVIDER)
-    api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
 
     if not body.get("stream"):
+        idem = idempotency.begin(
+            db, vk, header=idempotency_key,
+            endpoint="/v1/responses", provider=_PROVIDER, model=model, body_material=body,
+        )
+        enforce_workspace_quota(db, vk)
+        enforce_budget(db, vk)
+        enforce_workspace_cap(db, vk, _PROVIDER)
+        api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
         response = run_native_completion(
             db,
             vk,
@@ -62,9 +68,18 @@ def responses(
             prompt_preview=openai_adapter.prompt_preview(body),
             api_key=api_key,
             body=body,
+            idem=idem,
         )
         return JSONResponse(response)
 
+    enforce_workspace_quota(db, vk)
+    enforce_budget(db, vk)
+    enforce_workspace_cap(db, vk, _PROVIDER)
+    api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
+    idem = idempotency.claim_streaming(
+        db, vk, header=idempotency_key,
+        endpoint="/v1/responses:stream", provider=_PROVIDER, model=model, body_material=body,
+    )
     return StreamingResponse(
         stream_native_passthrough(
             vk.id,
@@ -75,6 +90,7 @@ def responses(
             accumulator_cls=openai_adapter.ResponsesStreamUsageAccumulator,
             api_key=api_key,
             body=body,
+            idem_record_id=idem.record_id,
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},

@@ -18,10 +18,11 @@ from fastapi import HTTPException
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app import providers, ratelimit
+from app import idempotency, providers, ratelimit
 from app.adapters.base import UsageInfo
 from app.config import settings
 from app.db import SessionLocal
+from app.idempotency import Idem
 from app.models import ModelPricing, ProviderCredential, UsageLog, VirtualKey
 from app.pricing import (
     PROVIDERS,
@@ -402,6 +403,25 @@ def completion_result_from_usage(
     )
 
 
+def _idem_after_upstream_error(idem: Idem | None, status_code: int, response) -> None:
+    """After a provider HTTP error on an idempotent request: cache a
+    deterministic 4xx as a terminal, replayable result, but RELEASE the claim on
+    a transient 429/5xx so a genuine retry can run — a transient failure must
+    never poison the key (decision 6)."""
+    if idem is None or not idem.enabled:
+        return
+    if status_code >= 500 or status_code == 429:
+        idempotency.release(idem)
+    else:
+        idempotency.finalize(
+            idem,
+            status_code=status_code,
+            content_type=response.headers.get("content-type"),
+            body=response.content,
+            terminal_status="failed",
+        )
+
+
 def run_completion(
     db: Session, vk: VirtualKey, provider: str, model: str, prompt: str
 ) -> CompletionResult:
@@ -468,12 +488,19 @@ def run_native_completion(
     prompt_preview: str,
     api_key: str,
     body: dict,
+    idem: Idem | None = None,
 ) -> dict:
     """For the provider-native passthrough endpoints (/v1/messages,
     /v1/responses, and the full-fidelity branch of /v1/chat/completions):
     calls `call_fn(body, api_key)`, records usage exactly like run_completion
     does (including on failure), and returns the RAW provider response —
-    unlike run_completion, the caller returns this untouched to the client."""
+    unlike run_completion, the caller returns this untouched to the client.
+
+    When `idem` is enabled, claims the idempotency key here (after governance,
+    right before the call), then finalizes it on success / deterministic 4xx or
+    releases it on a transient 429/5xx/transport failure — see app.idempotency."""
+    if idem is not None and idem.enabled:
+        idempotency.claim(idem)  # may raise IdempotencyReplay / 409 / 422
     t0 = time.perf_counter()
     try:
         response = call_fn(body, api_key)
@@ -490,6 +517,7 @@ def run_native_completion(
             f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
         )
         record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        _idem_after_upstream_error(idem, status_code, exc.response)
         raise UpstreamHTTPError(
             status_code, exc.response.content, exc.response.headers.get("content-type")
         ) from exc
@@ -502,6 +530,8 @@ def run_native_completion(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
         )
         record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        if idem is not None and idem.enabled:
+            idempotency.release(idem)  # transport failure => never poison the key
         raise HTTPException(
             status_code=502,
             detail={
@@ -516,7 +546,9 @@ def run_native_completion(
     result = completion_result_from_usage(
         usage, provider, model, latency_ms, text=text_preview_fn(response)
     )
-    record_usage(db, vk, provider, model, prompt_preview, result, request_id=response.get("id"))
+    row = record_usage(db, vk, provider, model, prompt_preview, result, request_id=response.get("id"))
+    if idem is not None and idem.enabled:
+        idempotency.finalize_json(idem, response, usage_log_id=row.id)
     return response
 
 
@@ -531,16 +563,19 @@ def run_native_completion_raw(
     preview_fn: Callable[[bytes, str], str] | None = None,
     prompt_preview: str,
     api_key: str,
+    idem: Idem | None = None,
 ) -> tuple[bytes, str]:
     """The binary/multipart counterpart of run_native_completion, for the
     audio endpoints: a request that isn't a JSON body (transcription takes a
     file upload) and/or a response that isn't JSON (TTS returns raw audio
-    bytes). Same governance/error/usage-recording contract — the router gets
-    back the provider's raw bytes and content-type, untouched, exactly as
-    run_native_completion hands back a raw dict for JSON endpoints.
+    bytes). Same governance/error/usage-recording/idempotency contract — the
+    router gets back the provider's raw bytes and content-type, untouched,
+    exactly as run_native_completion hands back a raw dict for JSON endpoints.
     `call_fn` takes only `api_key`; the router closes over everything else
     (file bytes, form fields, or a JSON body) since there's no one shape to
     generalize across transcription's multipart request and TTS's JSON one."""
+    if idem is not None and idem.enabled:
+        idempotency.claim(idem)  # may raise IdempotencyReplay / 409 / 422
     t0 = time.perf_counter()
     try:
         content, content_type = call_fn(api_key)
@@ -552,6 +587,7 @@ def run_native_completion_raw(
             f"[{provider} call failed: HTTP {status_code}]", 0, 0, 0.0, "configured", latency_ms
         )
         record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        _idem_after_upstream_error(idem, status_code, exc.response)
         raise UpstreamHTTPError(
             status_code, exc.response.content, exc.response.headers.get("content-type")
         ) from exc
@@ -562,6 +598,8 @@ def run_native_completion_raw(
             f"[{provider} call failed: {exc}]", 0, 0, 0.0, "configured", latency_ms
         )
         record_usage(db, vk, provider, model, prompt_preview, failed, status="error")
+        if idem is not None and idem.enabled:
+            idempotency.release(idem)  # transport failure => never poison the key
         raise HTTPException(
             status_code=502,
             detail={
@@ -575,7 +613,16 @@ def run_native_completion_raw(
     usage = extract_usage_fn(content, content_type)
     text = preview_fn(content, content_type) if preview_fn else ""
     result = completion_result_from_usage(usage, provider, model, latency_ms, text=text)
-    record_usage(db, vk, provider, model, prompt_preview, result)
+    row = record_usage(db, vk, provider, model, prompt_preview, result)
+    if idem is not None and idem.enabled:
+        idempotency.finalize(
+            idem,
+            status_code=200,
+            content_type=content_type,
+            body=content,
+            terminal_status="completed",
+            usage_log_id=row.id,
+        )
     return content, content_type
 
 
@@ -589,12 +636,18 @@ def stream_native_passthrough(
     accumulator_cls: type,
     api_key: str,
     body: dict,
+    idem_record_id: int | None = None,
 ) -> Iterator[str]:
     """For the provider-native streaming endpoints: re-emits every line from
     `stream_fn` verbatim (byte-for-byte SSE passthrough, no buffering) while an
     accumulator extracts usage as it goes; records usage once the stream ends
     (success or mid-stream failure) via record_usage_detached, exactly like the
     legacy streaming path does.
+
+    Streaming idempotency is a concurrency guard only (decision 8a): the router
+    has already claimed `idem_record_id` as an in-flight lock (a duplicate got
+    409); we release it here when the stream ends. Streams are never buffered or
+    replayed.
 
     Unlike the non-streaming path, a failure here can't change the HTTP status
     — by the time any exception from `stream_fn` surfaces, the 200 and SSE
@@ -635,6 +688,7 @@ def stream_native_passthrough(
     latency_ms = int((time.perf_counter() - t0) * 1000)
     result = completion_result_from_usage(acc.usage(), provider, model, latency_ms)
     record_usage_detached(vk_id, provider, model, prompt_preview, result, status=status)
+    idempotency.release_detached(idem_record_id)  # end of stream => drop the concurrency lock
 
 
 def _preview(text: str, limit: int = 500) -> str:

@@ -20,10 +20,11 @@ document/tool_use/tool_result), cache_control, tools/tool_choice all ride
 through untouched.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+from app import idempotency
 from app.adapters import anthropic_adapter
 from app.db import get_db
 from app.gateway import (
@@ -47,6 +48,7 @@ _PROVIDER = "anthropic"
 @router.post("/messages")
 def messages(
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
@@ -55,12 +57,18 @@ def messages(
         raise HTTPException(422, "model is required")
     authorize_provider(vk, _PROVIDER)
     authorize_model(vk, _PROVIDER, model)
-    enforce_workspace_quota(db, vk)
-    enforce_budget(db, vk)
-    enforce_workspace_cap(db, vk, _PROVIDER)
-    api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
 
     if not body.get("stream"):
+        # begin() runs BEFORE the spend gates so a free replay isn't blocked by a
+        # since-exhausted budget; claim() runs inside the funnel, after them.
+        idem = idempotency.begin(
+            db, vk, header=idempotency_key,
+            endpoint="/v1/messages", provider=_PROVIDER, model=model, body_material=body,
+        )
+        enforce_workspace_quota(db, vk)
+        enforce_budget(db, vk)
+        enforce_workspace_cap(db, vk, _PROVIDER)
+        api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
         response = run_native_completion(
             db,
             vk,
@@ -72,9 +80,20 @@ def messages(
             prompt_preview=anthropic_adapter.prompt_preview(body),
             api_key=api_key,
             body=body,
+            idem=idem,
         )
         return JSONResponse(response)
 
+    enforce_workspace_quota(db, vk)
+    enforce_budget(db, vk)
+    enforce_workspace_cap(db, vk, _PROVIDER)
+    api_key = require_live_ready(db, vk, _PROVIDER)  # 403 paused / 402 no key
+    # Streaming: concurrency guard only (no replay). Claimed after governance so a
+    # rejected request leaves no lock; released when the stream ends.
+    idem = idempotency.claim_streaming(
+        db, vk, header=idempotency_key,
+        endpoint="/v1/messages:stream", provider=_PROVIDER, model=model, body_material=body,
+    )
     return StreamingResponse(
         stream_native_passthrough(
             vk.id,
@@ -85,6 +104,7 @@ def messages(
             accumulator_cls=anthropic_adapter.AnthropicStreamUsageAccumulator,
             api_key=api_key,
             body=body,
+            idem_record_id=idem.record_id,
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},

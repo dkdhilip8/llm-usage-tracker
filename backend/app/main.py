@@ -7,10 +7,11 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import Scope
 
-from app import providers, ratelimit
+from app import idempotency, providers, ratelimit
 from app.config import settings
 from app.db import Base, SessionLocal, engine
 from app.gateway import UpstreamHTTPError
+from app.idempotency import IdempotencyReplay
 from app.routers import (
     account,
     audio,
@@ -54,6 +55,7 @@ async def lifespan(_: FastAPI):
         from app.bootstrap import bootstrap
 
         bootstrap(db)  # schema migration
+    idempotency.cleanup_expired_startup()  # sweep expired idempotency records
     providers.warm_cache()  # best-effort liveness check for any configured provider
     yield
     providers.close_client()
@@ -90,6 +92,20 @@ async def upstream_http_error_handler(_: Request, exc: UpstreamHTTPError) -> Res
         content=exc.content,
         status_code=exc.status_code,
         media_type=exc.content_type or "application/json",
+    )
+
+
+@app.exception_handler(IdempotencyReplay)
+async def idempotency_replay_handler(_: Request, exc: IdempotencyReplay) -> Response:
+    """Replay a stored idempotent response byte-for-byte with its original
+    status and content-type, so a retry with the same Idempotency-Key returns
+    exactly what the first call did without touching the provider. See
+    app.idempotency."""
+    return Response(
+        content=exc.content,
+        status_code=exc.status_code,
+        media_type=exc.content_type,
+        headers={"Idempotent-Replayed": "true"},
     )
 
 

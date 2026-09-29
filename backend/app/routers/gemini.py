@@ -21,10 +21,11 @@ shape, is validated by the gateway). `contents`/`parts` (incl. multimodal
 it only proxies the call and the model's tool-call request.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
+from app import idempotency
 from app.adapters import gemini_adapter
 from app.db import get_db
 from app.gateway import (
@@ -45,13 +46,18 @@ router = APIRouter(prefix="/v1beta", tags=["gemini-native"])
 _PROVIDER = "gemini"
 
 
-def _authorize(db: Session, vk: VirtualKey, model: str) -> str:
-    """Shared governance preamble for every native Gemini endpoint below.
-    Returns the live API key, or raises the appropriate HTTPException."""
+def _authorize_acl(vk: VirtualKey, model: str) -> None:
+    """The deterministic ACL half of the preamble — cheap checks that also define
+    the request's identity, run before the idempotency lookup."""
     if not model:
         raise HTTPException(422, "model is required")
     authorize_provider(vk, _PROVIDER)
     authorize_model(vk, _PROVIDER, model)
+
+
+def _govern_and_key(db: Session, vk: VirtualKey) -> str:
+    """The spend/quota gates + live-readiness half — the "new work" gates that a
+    replay must skip. Returns the live API key, or raises the appropriate error."""
     enforce_workspace_quota(db, vk)
     enforce_budget(db, vk)
     enforce_workspace_cap(db, vk, _PROVIDER)
@@ -62,10 +68,16 @@ def _authorize(db: Session, vk: VirtualKey, model: str) -> str:
 def generate_content(
     model: str,
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
-    api_key = _authorize(db, vk, model)
+    _authorize_acl(vk, model)
+    idem = idempotency.begin(
+        db, vk, header=idempotency_key,
+        endpoint="/v1beta/models:generateContent", provider=_PROVIDER, model=model, body_material=body,
+    )
+    api_key = _govern_and_key(db, vk)
 
     response = run_native_completion(
         db,
@@ -78,6 +90,7 @@ def generate_content(
         prompt_preview=gemini_adapter.prompt_preview(body),
         api_key=api_key,
         body=body,
+        idem=idem,
     )
     return JSONResponse(response)
 
@@ -86,10 +99,16 @@ def generate_content(
 def stream_generate_content(
     model: str,
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
-    api_key = _authorize(db, vk, model)
+    _authorize_acl(vk, model)
+    api_key = _govern_and_key(db, vk)
+    idem = idempotency.claim_streaming(
+        db, vk, header=idempotency_key,
+        endpoint="/v1beta/models:streamGenerateContent", provider=_PROVIDER, model=model, body_material=body,
+    )
 
     return StreamingResponse(
         stream_native_passthrough(
@@ -101,6 +120,7 @@ def stream_generate_content(
             accumulator_cls=gemini_adapter.GeminiStreamUsageAccumulator,
             api_key=api_key,
             body=body,
+            idem_record_id=idem.record_id,
         ),
         media_type="text/event-stream",
         headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"},
@@ -111,10 +131,16 @@ def stream_generate_content(
 def embed_content(
     model: str,
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
-    api_key = _authorize(db, vk, model)
+    _authorize_acl(vk, model)
+    idem = idempotency.begin(
+        db, vk, header=idempotency_key,
+        endpoint="/v1beta/models:embedContent", provider=_PROVIDER, model=model, body_material=body,
+    )
+    api_key = _govern_and_key(db, vk)
 
     response = run_native_completion(
         db,
@@ -127,6 +153,7 @@ def embed_content(
         prompt_preview=gemini_adapter.embed_prompt_preview(body),
         api_key=api_key,
         body=body,
+        idem=idem,
     )
     return JSONResponse(response)
 
@@ -135,10 +162,16 @@ def embed_content(
 def batch_embed_contents(
     model: str,
     body: dict,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     vk: VirtualKey = Depends(require_virtual_key),
     db: Session = Depends(get_db),
 ):
-    api_key = _authorize(db, vk, model)
+    _authorize_acl(vk, model)
+    idem = idempotency.begin(
+        db, vk, header=idempotency_key,
+        endpoint="/v1beta/models:batchEmbedContents", provider=_PROVIDER, model=model, body_material=body,
+    )
+    api_key = _govern_and_key(db, vk)
 
     response = run_native_completion(
         db,
@@ -151,5 +184,6 @@ def batch_embed_contents(
         prompt_preview=gemini_adapter.batch_embed_prompt_preview(body),
         api_key=api_key,
         body=body,
+        idem=idem,
     )
     return JSONResponse(response)

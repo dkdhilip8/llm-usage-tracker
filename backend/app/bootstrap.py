@@ -114,6 +114,16 @@ def _migrate(db: Session) -> None:
         db.execute(text("ALTER TABLE usage_logs ADD COLUMN characters INTEGER"))
         db.commit()
 
+    # v10: idempotency records. A brand-new table, so `create_all` (run just
+    # before this in app.main's lifespan) already creates it — this guarded
+    # block keeps the migration ledger complete and self-creates the table if
+    # create_all is ever gated off.
+    if not _has_table(db, "idempotency_keys"):
+        from app.models import IdempotencyRecord
+
+        IdempotencyRecord.__table__.create(bind=db.get_bind(), checkfirst=True)
+        db.commit()
+
 
 def _migrate_v6_workspaces(db: Session) -> None:
     """Runs once, guarded by the presence of the old `users.is_admin` column.

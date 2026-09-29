@@ -279,6 +279,9 @@ Or point an UptimeRobot / cron-job.org monitor at `/healthz` every 10 minutes.
 | `PROVIDER_CHECK_TTL` | `300` | Seconds to cache a provider liveness check. |
 | `LOG_BODIES` | `false` | Store truncated prompt/response previews on `usage_logs` for the Requests tab. Off by default — bodies can be sensitive. |
 | `MODEL_PRICING_OVERRIDES_PATH` | `""` | Optional path to a JSON file of extra `{provider, model, input, output}` price entries, merged over the built-in table at startup — price a newly released model without a code deploy. A missing/malformed file is silently ignored. |
+| `IDEMPOTENCY_TTL_HOURS` | `24` | How long a stored `Idempotency-Key` result is replayable before it expires and an identical request is treated as fresh (`app/idempotency.py`). |
+| `IDEMPOTENCY_MAX_REPLAY_BYTES` | `262144` | Max response body stored (encrypted) for replay. A larger response (big base64 image, long audio) is recorded terminal-but-**not** replayable — no double-charge, but a retry gets a 409 rather than a wrong empty body. |
+| `IDEMPOTENCY_INFLIGHT_TIMEOUT_SECONDS` | `120` | A claim stuck `in_progress` longer than this (a crashed leader) may be reclaimed. Tied to the max provider call timeout (60s) + margin, deliberately not a short value. |
 
 ---
 
@@ -440,6 +443,13 @@ as the next request; the gateway just re-authorizes, re-budgets, and forwards ea
 - **model_pricing** — `(id, workspace_id → workspaces (`ON DELETE CASCADE`), provider, model,
   input_per_1m, output_per_1m, created_at, updated_at)`, unique on `(workspace_id, provider,
   model)`. A workspace's own price override — see "Model pricing registry" below.
+- **idempotency_keys** — `(id, key_id → virtual_keys (`ON DELETE CASCADE`), workspace_id,
+  idempotency_key, request_fingerprint, endpoint, provider, model, status (`in_progress` |
+  `completed` | `failed`), replayable, response_status, response_content_type,
+  response_body_encrypted (Fernet, nullable), usage_log_id → usage_logs (nullable), created_at,
+  updated_at, expires_at)`, unique on `(key_id, idempotency_key)`. Backs `Idempotency-Key` replay —
+  see "Idempotency" under Reliability. Scoped to the virtual key, so a key from another key/workspace
+  can never retrieve this row; the stored response body is encrypted at rest.
 
 ### Model pricing registry
 
@@ -609,6 +619,57 @@ alpine` service for development; production needs `REDIS_URL` pointing at a real
 Render-managed Key Value) instance to actually get the distributed, atomic behavior instead of the
 single-instance fallback.
 
+### Idempotency (`app/idempotency.py`)
+
+A client sends `Idempotency-Key: <token>` on a billable POST. The gateway remembers, **per virtual
+key**, the (key → completed response) mapping, so a retried request replays the stored response
+instead of calling — and re-billing — the provider again. Every non-streaming billable endpoint
+supports it: `/v1/chat/completions`, `/v1/responses`, `/v1/messages`, `/v1/embeddings`,
+`/v1/images/generations`, `/v1/audio/transcriptions`, `/v1/audio/speech`, Gemini's
+`generateContent` / `embedContent` / `batchEmbedContents`, and the Playground's `/v1/proxy/chat`.
+No header ⇒ behavior is exactly as before (opt-in per request).
+
+**Postgres, not Redis — and fail *closed*.** This is spend protection, the opposite of the rate
+limiter's fail-open Redis. The claim is durable, is written in the same Postgres the `usage_logs`
+row goes to, and elects a single leader via `UNIQUE(key_id, idempotency_key)` (`ON CONFLICT DO
+NOTHING`). Redis would be the wrong tool: the provisioned Key Value has persistence off and the
+limiter deliberately fails *open* — both fine for abuse throttling, both wrong for "don't charge
+twice."
+
+**Claim placement** (why it isn't just "first thing in the request"): after authenticating the key
+and authorizing provider/model (which also defines the request's fingerprint), a **read** checks for
+a stored result *before* the quota/budget/cap gates — a free replay must not be blocked by a
+since-exhausted budget. The **write** (the claim) happens *after* all those gates, immediately
+before the provider call — so a request rejected by governance never leaves a claim that would block
+a genuine later retry. Two identical requests both pass governance cheaply (DB reads), then race the
+insert; one reaches the provider, the other gets `409`.
+
+**Fingerprint.** SHA-256 over endpoint + provider + model + canonical body (multipart audio also
+hashes the raw file bytes). Same key + a *different* body ⇒ `422`; only a hash is stored, never the
+raw request.
+
+**Response body is encrypted at rest** (Fernet, same key infrastructure as provider creds) and
+stored only up to `IDEMPOTENCY_MAX_REPLAY_BYTES`. A larger response is recorded terminal-but-**not**
+replayable (`replayable=false`, body `NULL`): the key still can't drive a second billable call, but
+a retry gets an explicit `409 idempotency_not_replayable` rather than a silently-wrong empty body.
+
+**Failure semantics** (a transient failure must never poison a key): a deterministic provider `4xx`
+is cached terminal and replayed; a transient `429`/`5xx`/transport failure **releases** the claim so
+a genuine retry can run. A claim stuck `in_progress` past `IDEMPOTENCY_INFLIGHT_TIMEOUT_SECONDS`
+(e.g. a crashed leader) is reclaimed by the next request; expired rows are swept opportunistically
+and at startup.
+
+**Streaming is a concurrency guard only** (no replay): a second identical stream while one is in
+flight gets `409`; completed streams are never buffered or replayed. The lock is released when the
+stream ends.
+
+**The one window it can't fully close:** gateway-side idempotency closes the *client → gateway*
+retry window completely. It cannot by itself resolve an ambiguous *gateway → provider* **transport**
+failure — when no response comes back, the gateway can't know whether the provider billed, so it
+releases and allows a retry, accepting that a retry could double-charge in that one narrow case.
+Forwarding the key upstream to providers that honor it (unverified for Anthropic/Gemini) is a
+deliberately deferred later slice.
+
 ### What's not proxied (and why)
 
 - **OpenAI Realtime / a future Gemini Live API** — WebSocket, not request/response. The whole
@@ -653,7 +714,8 @@ single-instance fallback.
 OpenAI image edits/variations, audio translations, duration/character rates in the model pricing
 registry (Phase 3 continued, all documented limitations above) · Phase 4 reliability continued —
 moving the circuit breaker/liveness cache above off process-local state now that the rate limiter
-has shown the pattern, an explicit idempotency strategy, deployment/drift monitoring, CI/CD
-actually running in the repo, reliability/failure testing · Gemini built-in tools (code execution,
+has shown the pattern, forwarding `Idempotency-Key` upstream to providers that honor it (the
+deferred slice of the idempotency work below), deployment/drift monitoring, CI/CD actually running
+in the repo, reliability/failure testing · Gemini built-in tools (code execution,
 Search grounding) test coverage · per-model budgets · webhook/Slack alerts · usage-anomaly
 detection · exact-match response cache · SSO / org hierarchy.
